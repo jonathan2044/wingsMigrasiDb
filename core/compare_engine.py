@@ -363,7 +363,6 @@ class CompareEngine:
                 f"SELECT key_values FROM compare_results WHERE status='{RESULT_MISSING_LEFT}' LIMIT 5"
             ).fetchall()
             logger.info("[compare_data] Sample key MISSING LEFT (ada di kanan, tidak di kiri): %s", sample_ml)
-            raise
 
 
     def _compare_data_row_order(self):
