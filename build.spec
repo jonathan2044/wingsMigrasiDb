@@ -129,6 +129,17 @@ a = Analysis(
         'psycopg2.extensions',
         'psycopg2.extras',
         'psycopg2.sql',
+        # ── SSH Tunnel ──
+        'sshtunnel',
+        'paramiko',
+        'paramiko.transport',
+        'paramiko.auth_handler',
+        'paramiko.server',
+        'paramiko.rsakey',
+        'paramiko.ed25519key',
+        'paramiko.ecdsakey',
+        'cryptography',
+        'cryptography.hazmat.primitives.asymmetric',
         # ── SQLAlchemy ──
         'sqlalchemy',
         'sqlalchemy.dialects.postgresql',
