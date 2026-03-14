@@ -1,0 +1,112 @@
+name: Build Windows Portable
+
+on:
+  # Trigger manual dari tab "Actions" di GitHub
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versi build (misal: 1.0.0)'
+        required: false
+        default: 'dev'
+
+  # Juga trigger otomatis saat push tag v*.*.* (opsional)
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-windows:
+    name: Build PyInstaller (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. Checkout source code ────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Setup Python 3.11 ──────────────────────────────────────────────
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+
+      # ── 3. Cache pip packages (percepat build ulang) ──────────────────────
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # ── 4. Install dependencies ───────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+        shell: cmd
+
+      # ── 5. Jalankan PyInstaller ───────────────────────────────────────────
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller build.spec --noconfirm
+        shell: cmd
+
+      # ── 6. Siapkan struktur portable ──────────────────────────────────────
+      - name: Prepare portable structure
+        run: |
+          copy /y "_portable" "dist\DataCompareTool\_portable"
+          if not exist "dist\DataCompareTool\AppData" mkdir "dist\DataCompareTool\AppData"
+          if not exist "dist\DataCompareTool\AppData\logs" mkdir "dist\DataCompareTool\AppData\logs"
+        shell: cmd
+
+      # ── 7. Tentukan nama versi ─────────────────────────────────────────────
+      - name: Set version string
+        id: version
+        run: |
+          if ("${{ github.event_name }}" -eq "push") {
+            $ver = "${{ github.ref_name }}"
+          } else {
+            $ver = "${{ github.event.inputs.version }}"
+            if (-not $ver) { $ver = "dev" }
+          }
+          echo "VER=$ver" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      # ── 8. Zip hasil build ─────────────────────────────────────────────────
+      - name: Zip portable folder
+        run: |
+          $ver = "${{ steps.version.outputs.VER }}"
+          $zipName = "DataCompareTool-$ver-windows-portable.zip"
+          Compress-Archive -Path "dist\DataCompareTool\*" -DestinationPath $zipName -Force
+          echo "ZIP_NAME=$zipName" >> $env:GITHUB_OUTPUT
+        id: zip
+        shell: pwsh
+
+      # ── 9. Upload artifact (dapat didownload dari tab Actions) ─────────────
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DataCompareTool-${{ steps.version.outputs.VER }}-windows-portable
+          path: ${{ steps.zip.outputs.ZIP_NAME }}
+          retention-days: 30
+
+      # ── 10. Buat GitHub Release jika trigger dari tag ──────────────────────
+      - name: Create GitHub Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.zip.outputs.ZIP_NAME }}
+          name: Data Compare Tool ${{ steps.version.outputs.VER }}
+          body: |
+            ## Data Compare Tool ${{ steps.version.outputs.VER }}
+
+            ### Download
+            Unduh file zip di bawah, ekstrak, lalu jalankan `DataCompareTool.exe`.
+
+            ### Catatan
+            - Portable — tidak perlu install, data tersimpan di folder `AppData\` di samping `.exe`
+            - Membutuhkan Windows 10/11 64-bit
+          draft: false
+          prerelease: false

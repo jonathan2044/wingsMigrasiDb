@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# PyInstaller output
+dist/
+build/
+*.spec.bak
+
+# App data (database, logs, job results) — jangan di-commit
+AppData/app_data.db
+AppData/app_data.db.wal
+AppData/logs/
+AppData/jobs/
+AppData/exports/
+_appdata_backup/
+
+# Python cache
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Env file (kalau ada)
+.env
+.env.*

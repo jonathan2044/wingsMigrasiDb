@@ -1,0 +1,1023 @@
+"""
+ui/pages/new_job_page.py
+Halaman pembuatan job baru - wizard multi-langkah.
+Langkah: 1) Pilih mode → 2) Sumber data → 3) Pemetaan kolom → 4) Opsi → 5) Review & Jalankan
+"""
+
+from __future__ import annotations
+import uuid
+from typing import TYPE_CHECKING, List, Optional
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QFrame, QLineEdit, QComboBox, QCheckBox, QFileDialog,
+    QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView,
+    QTextEdit, QGroupBox, QSpinBox, QSplitter, QStackedWidget,
+    QMessageBox, QSizePolicy,
+)
+from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtGui import QFont
+
+from config.constants import (
+    JOB_TYPE_FILE_VS_FILE, JOB_TYPE_FILE_VS_PG,
+    JOB_STATUS_QUEUED, STEP_INIT,
+)
+from models.job import CompareJob
+from models.compare_config import (
+    CompareConfig, DataSourceConfig, CompareOptions, ColumnMapping,
+)
+from ui.styles import (
+    COLOR_PRIMARY, COLOR_TEXT, COLOR_TEXT_MUTED, COLOR_CARD_BG,
+    COLOR_BORDER, COLOR_BG, COLOR_SUCCESS, COLOR_DANGER,
+)
+
+if TYPE_CHECKING:
+    from config.settings import AppSettings
+    from storage.job_manager import JobManager
+    from storage.connection_store import ConnectionStore
+
+
+class StepIndicator(QWidget):
+    """Indikator langkah wizard di bagian atas."""
+
+    def __init__(self, steps: List[str], parent=None):
+        super().__init__(parent)
+        self._steps = steps
+        self._current = 0
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self._labels: list = []
+        for i, step in enumerate(self._steps):
+            if i > 0:
+                line = QLabel("—")
+                line.setStyleSheet(f"color: {COLOR_BORDER}; font-size: 14px;")
+                layout.addWidget(line)
+            lbl = QLabel(f"{i+1}. {step}")
+            lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._labels.append(lbl)
+            layout.addWidget(lbl)
+
+    def set_step(self, idx: int):
+        self._current = idx
+        for i, lbl in enumerate(self._labels):
+            if i == idx:
+                lbl.setStyleSheet(
+                    f"color: {COLOR_PRIMARY}; font-weight: 700; font-size: 12px;"
+                )
+            elif i < idx:
+                lbl.setStyleSheet(
+                    f"color: {COLOR_SUCCESS}; font-size: 12px;"
+                )
+            else:
+                lbl.setStyleSheet(
+                    f"color: {COLOR_TEXT_MUTED}; font-size: 12px;"
+                )
+
+
+class SourceConfigWidget(QWidget):
+    """Widget konfigurasi satu sumber data (kiri/kanan)."""
+
+    headers_loaded = Signal(list)
+
+    def __init__(
+        self,
+        label: str,
+        connection_store: "ConnectionStore",
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._label = label
+        self._connection_store = connection_store
+        self._headers: List[str] = []
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        # Judul
+        title = QLabel(f"Sumber Data {self._label}")
+        title.setObjectName("sectionHeader")
+        layout.addWidget(title)
+
+        # Pilih tipe
+        type_row = QHBoxLayout()
+        type_row.addWidget(QLabel("Tipe Sumber:"))
+        self._type_combo = QComboBox()
+        self._type_combo.addItems(["File Excel (.xlsx)", "File CSV (.csv)", "PostgreSQL"])
+        self._type_combo.setFixedWidth(220)
+        self._type_combo.currentIndexChanged.connect(self._on_type_changed)
+        type_row.addWidget(self._type_combo)
+        type_row.addStretch()
+        layout.addLayout(type_row)
+
+        # Stacked widget untuk tiap tipe
+        self._stack = QStackedWidget()
+
+        # -- Page 0: Excel --
+        self._excel_widget = self._build_excel_widget()
+        self._stack.addWidget(self._excel_widget)
+
+        # -- Page 1: CSV --
+        self._csv_widget = self._build_csv_widget()
+        self._stack.addWidget(self._csv_widget)
+
+        # -- Page 2: PostgreSQL --
+        self._pg_widget = self._build_pg_widget()
+        self._stack.addWidget(self._pg_widget)
+
+        layout.addWidget(self._stack)
+
+    def _build_excel_widget(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        # File picker
+        file_row = QHBoxLayout()
+        self._excel_path = QLineEdit()
+        self._excel_path.setPlaceholderText("Pilih file Excel (.xlsx)...")
+        self._excel_path.setReadOnly(True)
+        file_row.addWidget(self._excel_path)
+        browse_btn = QPushButton("📂 Telusuri")
+        browse_btn.setObjectName("secondaryBtn")
+        browse_btn.clicked.connect(self._browse_excel)
+        file_row.addWidget(browse_btn)
+        layout.addLayout(file_row)
+
+        # Sheet picker
+        sheet_row = QHBoxLayout()
+        sheet_row.addWidget(QLabel("Sheet:"))
+        self._excel_sheet = QComboBox()
+        self._excel_sheet.setFixedWidth(200)
+        self._excel_sheet.setEnabled(False)
+        sheet_row.addWidget(self._excel_sheet)
+
+        skip_row_lbl = QLabel("Lewati baris:")
+        self._excel_skip = QSpinBox()
+        self._excel_skip.setValue(0)
+        self._excel_skip.setRange(0, 100)
+        self._excel_skip.setFixedWidth(60)
+        sheet_row.addWidget(skip_row_lbl)
+        sheet_row.addWidget(self._excel_skip)
+        sheet_row.addStretch()
+        layout.addLayout(sheet_row)
+
+        # Load headers button
+        load_btn = QPushButton("🔍 Muat Header Kolom")
+        load_btn.setObjectName("secondaryBtn")
+        load_btn.clicked.connect(self._load_excel_headers)
+        layout.addWidget(load_btn)
+
+        return w
+
+    def _build_csv_widget(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        file_row = QHBoxLayout()
+        self._csv_path = QLineEdit()
+        self._csv_path.setPlaceholderText("Pilih file CSV (.csv)...")
+        self._csv_path.setReadOnly(True)
+        file_row.addWidget(self._csv_path)
+        browse_btn = QPushButton("📂 Telusuri")
+        browse_btn.setObjectName("secondaryBtn")
+        browse_btn.clicked.connect(self._browse_csv)
+        file_row.addWidget(browse_btn)
+        layout.addLayout(file_row)
+
+        opt_row = QHBoxLayout()
+        opt_row.addWidget(QLabel("Separator:"))
+        self._csv_sep = QComboBox()
+        self._csv_sep.addItems([", (koma)", "; (titik koma)", "\\t (tab)", "| (pipe)"])
+        self._csv_sep.setFixedWidth(160)
+        opt_row.addWidget(self._csv_sep)
+
+        opt_row.addWidget(QLabel("Encoding:"))
+        self._csv_enc = QComboBox()
+        self._csv_enc.addItems(["utf-8", "utf-8-sig", "latin-1", "cp1252"])
+        self._csv_enc.setFixedWidth(110)
+        opt_row.addWidget(self._csv_enc)
+        opt_row.addStretch()
+        layout.addLayout(opt_row)
+
+        load_btn = QPushButton("🔍 Muat Header Kolom")
+        load_btn.setObjectName("secondaryBtn")
+        load_btn.clicked.connect(self._load_csv_headers)
+        layout.addWidget(load_btn)
+
+        return w
+
+    def _build_pg_widget(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        # Profil koneksi
+        conn_row = QHBoxLayout()
+        conn_row.addWidget(QLabel("Profil Koneksi:"))
+        self._pg_profile = QComboBox()
+        self._pg_profile.setMinimumWidth(200)
+        self._pg_profile.currentIndexChanged.connect(self._on_pg_profile_changed)
+        conn_row.addWidget(self._pg_profile)
+        refresh_btn = QPushButton("↻")
+        refresh_btn.setObjectName("secondaryBtn")
+        refresh_btn.setFixedSize(32, 32)
+        refresh_btn.clicked.connect(self._load_pg_profiles)
+        conn_row.addWidget(refresh_btn)
+        conn_row.addStretch()
+        layout.addLayout(conn_row)
+
+        # Schema & tabel
+        table_row = QHBoxLayout()
+        table_row.addWidget(QLabel("Schema:"))
+        self._pg_schema = QComboBox()
+        self._pg_schema.setFixedWidth(140)
+        self._pg_schema.currentTextChanged.connect(self._on_pg_schema_changed)
+        table_row.addWidget(self._pg_schema)
+
+        table_row.addWidget(QLabel("Tabel:"))
+        self._pg_table = QComboBox()
+        self._pg_table.setMinimumWidth(180)
+        self._pg_table.currentTextChanged.connect(self._on_pg_table_changed)
+        table_row.addWidget(self._pg_table)
+        table_row.addStretch()
+        layout.addLayout(table_row)
+
+        # Custom query
+        self._pg_custom_chk = QCheckBox("Gunakan custom SQL query")
+        self._pg_custom_chk.toggled.connect(self._on_custom_query_toggled)
+        layout.addWidget(self._pg_custom_chk)
+
+        self._pg_query = QTextEdit()
+        self._pg_query.setPlaceholderText("SELECT * FROM schema.tabel WHERE ...")
+        self._pg_query.setMaximumHeight(80)
+        self._pg_query.setEnabled(False)
+        layout.addWidget(self._pg_query)
+
+        load_btn = QPushButton("🔍 Muat Header Kolom")
+        load_btn.setObjectName("secondaryBtn")
+        load_btn.clicked.connect(self._load_pg_headers)
+        layout.addWidget(load_btn)
+
+        return w
+
+    # ------------------------------------------------------------------ actions
+
+    def _on_type_changed(self, idx: int):
+        self._stack.setCurrentIndex(idx)
+        if idx == 2:
+            self._load_pg_profiles()
+
+    def _browse_excel(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Pilih File Excel", "", "Excel Files (*.xlsx *.xls)"
+        )
+        if path:
+            self._excel_path.setText(path)
+            self._load_sheet_names(path)
+
+    def _browse_csv(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Pilih File CSV", "", "CSV Files (*.csv)"
+        )
+        if path:
+            self._csv_path.setText(path)
+
+    def _load_sheet_names(self, path: str):
+        try:
+            from services.file_reader import ExcelReader
+            reader = ExcelReader(path)
+            sheets = reader.list_sheets()
+            self._excel_sheet.clear()
+            self._excel_sheet.addItems(sheets)
+            self._excel_sheet.setEnabled(True)
+        except Exception as e:
+            QMessageBox.warning(self, "Gagal Membaca Sheet", str(e))
+
+    def _load_excel_headers(self):
+        path = self._excel_path.text()
+        if not path:
+            QMessageBox.warning(self, "File Belum Dipilih", "Pilih file Excel terlebih dahulu.")
+            return
+        try:
+            from services.file_reader import ExcelReader
+            reader = ExcelReader(path)
+            sheet = self._excel_sheet.currentText() or 0
+            skip = self._excel_skip.value()
+            headers = reader.get_headers(sheet, skip)
+            self._headers = headers
+            self.headers_loaded.emit(headers)
+            QMessageBox.information(
+                self, "Header Dimuat",
+                f"Berhasil memuat {len(headers)} kolom:\n{', '.join(headers[:10])}{'...' if len(headers) > 10 else ''}"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Gagal Muat Header", str(e))
+
+    def _load_csv_headers(self):
+        path = self._csv_path.text()
+        if not path:
+            QMessageBox.warning(self, "File Belum Dipilih", "Pilih file CSV terlebih dahulu.")
+            return
+        try:
+            from services.file_reader import CSVReader
+            sep_map = {0: ",", 1: ";", 2: "\t", 3: "|"}
+            sep = sep_map.get(self._csv_sep.currentIndex(), ",")
+            enc = self._csv_enc.currentText()
+            reader = CSVReader(path, sep, enc)
+            headers = reader.get_headers()
+            self._headers = headers
+            self.headers_loaded.emit(headers)
+            QMessageBox.information(
+                self, "Header Dimuat",
+                f"Berhasil memuat {len(headers)} kolom."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Gagal Muat Header", str(e))
+
+    def _load_pg_profiles(self):
+        try:
+            profiles = self._connection_store.get_all()
+            self._pg_profile.clear()
+            for p in profiles:
+                self._pg_profile.addItem(p.name, p.id)
+        except Exception as e:
+            pass
+
+    def _on_pg_profile_changed(self, idx: int):
+        pass  # Schema akan dimuat saat user klik load
+
+    def _on_pg_schema_changed(self, schema: str):
+        if not schema:
+            return
+        profile_id = self._pg_profile.currentData()
+        if not profile_id:
+            return
+        try:
+            profile = self._connection_store.get_by_id(profile_id)
+            if profile:
+                from services.postgres_connector import PostgresConnector
+                pg = PostgresConnector.from_profile(profile)
+                tables = pg.list_tables(schema)
+                pg.close()
+                self._pg_table.clear()
+                self._pg_table.addItems(tables)
+        except Exception:
+            pass
+
+    def _on_pg_table_changed(self, table: str):
+        pass
+
+    def _on_custom_query_toggled(self, checked: bool):
+        self._pg_query.setEnabled(checked)
+        self._pg_table.setEnabled(not checked)
+        self._pg_schema.setEnabled(not checked)
+
+    def _load_pg_headers(self):
+        profile_id = self._pg_profile.currentData()
+        if not profile_id:
+            QMessageBox.warning(self, "Profil Belum Dipilih", "Pilih profil koneksi terlebih dahulu.")
+            return
+        try:
+            profile = self._connection_store.get_by_id(profile_id)
+            if not profile:
+                return
+            from services.postgres_connector import PostgresConnector
+            pg = PostgresConnector.from_profile(profile)
+
+            if self._pg_custom_chk.isChecked():
+                query = self._pg_query.toPlainText().strip()
+                if not query:
+                    QMessageBox.warning(self, "Query Kosong", "Isi SQL query terlebih dahulu.")
+                    return
+                import pandas as pd
+                from sqlalchemy import create_engine
+                engine = pg._get_engine()
+                df = pd.read_sql(f"SELECT * FROM ({query}) AS q LIMIT 0", engine, dtype=str)
+                headers = list(df.columns)
+            else:
+                schema = self._pg_schema.currentText()
+                table = self._pg_table.currentText()
+                headers = pg.get_columns(schema, table)
+            pg.close()
+
+            self._headers = headers
+            self.headers_loaded.emit(headers)
+            QMessageBox.information(self, "Header Dimuat", f"Berhasil memuat {len(headers)} kolom.")
+        except Exception as e:
+            QMessageBox.critical(self, "Gagal Muat Header", str(e))
+
+    # ------------------------------------------------------------------ data
+
+    def get_source_config(self) -> DataSourceConfig:
+        """Ambil konfigurasi sumber yang telah diisi user."""
+        cfg = DataSourceConfig()
+        idx = self._type_combo.currentIndex()
+
+        if idx == 0:  # Excel
+            cfg.source_type = "excel"
+            cfg.file_path = self._excel_path.text()
+            cfg.sheet_name = self._excel_sheet.currentText()
+            cfg.skip_rows = self._excel_skip.value()
+        elif idx == 1:  # CSV
+            sep_map = {0: ",", 1: ";", 2: "\t", 3: "|"}
+            cfg.source_type = "csv"
+            cfg.file_path = self._csv_path.text()
+            cfg.csv_separator = sep_map.get(self._csv_sep.currentIndex(), ",")
+            cfg.csv_encoding = self._csv_enc.currentText()
+        else:  # PostgreSQL
+            cfg.source_type = "postgres"
+            cfg.connection_id = self._pg_profile.currentData() or ""
+            cfg.schema_name = self._pg_schema.currentText()
+            cfg.table_name = self._pg_table.currentText()
+            cfg.use_custom_query = self._pg_custom_chk.isChecked()
+            cfg.custom_query = self._pg_query.toPlainText().strip()
+
+        return cfg
+
+    def get_headers(self) -> List[str]:
+        return self._headers
+
+
+class NewJobPage(QWidget):
+    """Halaman pembuatan job baru dengan wizard multi-langkah."""
+
+    job_submitted = Signal(CompareJob, CompareConfig)
+
+    STEPS = ["Mode", "Sumber Data", "Pemetaan Kolom", "Opsi Compare", "Review & Jalankan"]
+
+    def __init__(
+        self,
+        settings: "AppSettings",
+        job_manager: "JobManager",
+        connection_store: "ConnectionStore",
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._settings = settings
+        self._job_manager = job_manager
+        self._connection_store = connection_store
+        self._current_step = 0
+        self._job_type = JOB_TYPE_FILE_VS_FILE
+        self._setup_ui()
+
+    def _setup_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(28, 24, 28, 24)
+        root.setSpacing(16)
+
+        # Header
+        header_row = QHBoxLayout()
+        title = QLabel("Buat Job Perbandingan Baru")
+        title.setObjectName("pageTitle")
+        header_row.addWidget(title)
+        header_row.addStretch()
+        root.addLayout(header_row)
+
+        # Step indicator
+        self._step_indicator = StepIndicator(self.STEPS)
+        root.addWidget(self._step_indicator)
+
+        # Separator
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet(f"color: {COLOR_BORDER};")
+        root.addWidget(line)
+
+        # Scrollable content area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("background: transparent;")
+
+        self._content_stack = QStackedWidget()
+        self._content_stack.addWidget(self._build_step_mode())
+        self._content_stack.addWidget(self._build_step_sources())
+        self._content_stack.addWidget(self._build_step_mapping())
+        self._content_stack.addWidget(self._build_step_options())
+        self._content_stack.addWidget(self._build_step_review())
+
+        scroll.setWidget(self._content_stack)
+        root.addWidget(scroll, 1)
+
+        # Navigation buttons
+        nav_row = QHBoxLayout()
+        self._btn_back = QPushButton("← Kembali")
+        self._btn_back.setObjectName("secondaryBtn")
+        self._btn_back.clicked.connect(self._go_back)
+        self._btn_back.setEnabled(False)
+
+        self._btn_next = QPushButton("Lanjut →")
+        self._btn_next.clicked.connect(self._go_next)
+
+        self._btn_run = QPushButton("▶  Mulai Perbandingan")
+        self._btn_run.setObjectName("successBtn")
+        self._btn_run.setStyleSheet(
+            f"background-color: {COLOR_SUCCESS}; color: white; "
+            "font-weight: 700; padding: 10px 24px;"
+        )
+        self._btn_run.hide()
+        self._btn_run.clicked.connect(self._submit_job)
+
+        nav_row.addWidget(self._btn_back)
+        nav_row.addStretch()
+        nav_row.addWidget(self._btn_next)
+        nav_row.addWidget(self._btn_run)
+        root.addLayout(nav_row)
+
+    # ------------------------------------------------------------------ step builders
+
+    def _build_step_mode(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(16)
+
+        lbl = QLabel("Pilih Mode Perbandingan")
+        lbl.setObjectName("sectionHeader")
+        layout.addWidget(lbl)
+
+        # Nama job
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("Nama Job:"))
+        self._job_name = QLineEdit()
+        self._job_name.setPlaceholderText("Misal: Rekonsiliasi Penjualan Q1 2024...")
+        self._job_name.setMinimumWidth(300)
+        name_row.addWidget(self._job_name)
+        name_row.addStretch()
+        layout.addLayout(name_row)
+
+        # Mode cards
+        modes_layout = QHBoxLayout()
+        modes_layout.setSpacing(16)
+
+        self._mode_ff = self._mode_card(
+            "📄 File vs File",
+            "Bandingkan dua file Excel atau CSV",
+            JOB_TYPE_FILE_VS_FILE,
+        )
+        self._mode_fp = self._mode_card(
+            "🗄 File vs PostgreSQL",
+            "Bandingkan file dengan tabel database",
+            JOB_TYPE_FILE_VS_PG,
+        )
+        modes_layout.addWidget(self._mode_ff)
+        modes_layout.addWidget(self._mode_fp)
+        modes_layout.addStretch()
+        layout.addLayout(modes_layout)
+
+        layout.addStretch()
+        return w
+
+    def _mode_card(self, title: str, desc: str, job_type: str) -> QPushButton:
+        btn = QPushButton(f"{title}\n{desc}")
+        btn.setObjectName("quickStartBtn")
+        btn.setMinimumSize(220, 80)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setCheckable(True)
+        btn.setProperty("job_type", job_type)
+        if job_type == JOB_TYPE_FILE_VS_FILE:
+            btn.setChecked(True)
+        btn.clicked.connect(lambda: self._select_mode(job_type))
+        return btn
+
+    def _select_mode(self, job_type: str):
+        self._job_type = job_type
+        self._mode_ff.setChecked(job_type == JOB_TYPE_FILE_VS_FILE)
+        self._mode_fp.setChecked(job_type == JOB_TYPE_FILE_VS_PG)
+
+        # Update mode card styles
+        for btn, t in [(self._mode_ff, JOB_TYPE_FILE_VS_FILE), (self._mode_fp, JOB_TYPE_FILE_VS_PG)]:
+            if t == job_type:
+                btn.setStyleSheet(
+                    f"background-color: {COLOR_PRIMARY}; color: white; "
+                    f"border-radius: 8px; padding: 12px 16px; text-align: left;"
+                )
+            else:
+                btn.setStyleSheet("")
+
+    def _build_step_sources(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(16)
+
+        lbl = QLabel("Konfigurasi Sumber Data")
+        lbl.setObjectName("sectionHeader")
+        layout.addWidget(lbl)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Left source
+        left_frame = QFrame()
+        left_frame.setObjectName("card")
+        left_layout = QVBoxLayout(left_frame)
+        self._left_source = SourceConfigWidget("Kiri (Referensi)", self._connection_store)
+        self._left_source.headers_loaded.connect(self._on_left_headers)
+        left_layout.addWidget(self._left_source)
+        splitter.addWidget(left_frame)
+
+        # Right source
+        right_frame = QFrame()
+        right_frame.setObjectName("card")
+        right_layout = QVBoxLayout(right_frame)
+        self._right_source = SourceConfigWidget("Kanan (Pembanding)", self._connection_store)
+        self._right_source.headers_loaded.connect(self._on_right_headers)
+        right_layout.addWidget(self._right_source)
+        splitter.addWidget(right_frame)
+
+        layout.addWidget(splitter, 1)
+        return w
+
+    def _build_step_mapping(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(16)
+
+        lbl = QLabel("Pemetaan Kolom")
+        lbl.setObjectName("sectionHeader")
+        hint = QLabel(
+            "Tentukan kolom KEY (penanda unik baris) dan kolom yang akan dibandingkan nilainya."
+        )
+        hint.setObjectName("hintLabel")
+        layout.addWidget(lbl)
+        layout.addWidget(hint)
+
+        # Key columns
+        key_grp = QGroupBox("Kolom Key (Kunci Unik)")
+        key_layout = QVBoxLayout(key_grp)
+
+        key_row = QHBoxLayout()
+        key_row.addWidget(QLabel("Kolom Kiri:"))
+        self._key_left_combo = QComboBox()
+        self._key_left_combo.setMinimumWidth(160)
+        key_row.addWidget(self._key_left_combo)
+
+        key_row.addWidget(QLabel("=  Kolom Kanan:"))
+        self._key_right_combo = QComboBox()
+        self._key_right_combo.setMinimumWidth(160)
+        key_row.addWidget(self._key_right_combo)
+
+        add_key_btn = QPushButton("+ Tambah Key")
+        add_key_btn.setObjectName("secondaryBtn")
+        add_key_btn.clicked.connect(self._add_key_mapping)
+        key_row.addWidget(add_key_btn)
+        key_row.addStretch()
+        key_layout.addLayout(key_row)
+
+        self._key_table = self._build_mapping_table()
+        key_layout.addWidget(self._key_table)
+        layout.addWidget(key_grp)
+
+        # Compare columns
+        cmp_grp = QGroupBox("Kolom yang akan Dibandingkan")
+        cmp_layout = QVBoxLayout(cmp_grp)
+
+        cmp_row = QHBoxLayout()
+        cmp_row.addWidget(QLabel("Kolom Kiri:"))
+        self._cmp_left_combo = QComboBox()
+        self._cmp_left_combo.setMinimumWidth(160)
+        cmp_row.addWidget(self._cmp_left_combo)
+
+        cmp_row.addWidget(QLabel("↔  Kolom Kanan:"))
+        self._cmp_right_combo = QComboBox()
+        self._cmp_right_combo.setMinimumWidth(160)
+        cmp_row.addWidget(self._cmp_right_combo)
+
+        add_cmp_btn = QPushButton("+ Tambah Kolom")
+        add_cmp_btn.setObjectName("secondaryBtn")
+        add_cmp_btn.clicked.connect(self._add_compare_mapping)
+        cmp_row.addWidget(add_cmp_btn)
+
+        add_all_btn = QPushButton("+ Tambah Semua")
+        add_all_btn.setObjectName("secondaryBtn")
+        add_all_btn.clicked.connect(self._add_all_compare)
+        cmp_row.addWidget(add_all_btn)
+        cmp_row.addStretch()
+        cmp_layout.addLayout(cmp_row)
+
+        self._cmp_table = self._build_mapping_table()
+        cmp_layout.addWidget(self._cmp_table)
+        layout.addWidget(cmp_grp)
+
+        return w
+
+    def _build_mapping_table(self) -> QTableWidget:
+        t = QTableWidget(0, 3)
+        t.setHorizontalHeaderLabels(["Kolom Kiri", "Kolom Kanan", "Hapus"])
+        t.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        t.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        t.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        t.setMaximumHeight(200)
+        t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        return t
+
+    def _build_step_options(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(12)
+
+        lbl = QLabel("Opsi Perbandingan")
+        lbl.setObjectName("sectionHeader")
+        layout.addWidget(lbl)
+
+        frame = QFrame()
+        frame.setObjectName("card")
+        frame_layout = QVBoxLayout(frame)
+        frame_layout.setSpacing(10)
+
+        self._opt_trim = QCheckBox("Trim whitespace (hapus spasi di awal/akhir)")
+        self._opt_trim.setChecked(True)
+        self._opt_case = QCheckBox("Abaikan huruf besar/kecil (ignore case)")
+        self._opt_null = QCheckBox("Anggap string kosong sebagai NULL")
+        self._opt_null.setChecked(True)
+        self._opt_date = QCheckBox("Normalisasi format tanggal")
+        self._opt_num = QCheckBox("Normalisasi format angka (round desimal)")
+
+        for chk in [self._opt_trim, self._opt_case, self._opt_null, self._opt_date, self._opt_num]:
+            frame_layout.addWidget(chk)
+
+        # Date format & decimal places
+        date_row = QHBoxLayout()
+        date_row.addWidget(QLabel("    Format tanggal:"))
+        self._date_fmt = QComboBox()
+        self._date_fmt.addItems(["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"])
+        self._date_fmt.setEnabled(False)
+        self._opt_date.toggled.connect(self._date_fmt.setEnabled)
+        date_row.addWidget(self._date_fmt)
+        date_row.addStretch()
+        frame_layout.addLayout(date_row)
+
+        num_row = QHBoxLayout()
+        num_row.addWidget(QLabel("    Jumlah desimal:"))
+        self._decimal_places = QSpinBox()
+        self._decimal_places.setValue(2)
+        self._decimal_places.setRange(0, 10)
+        self._decimal_places.setFixedWidth(60)
+        self._decimal_places.setEnabled(False)
+        self._opt_num.toggled.connect(self._decimal_places.setEnabled)
+        num_row.addWidget(self._decimal_places)
+        num_row.addStretch()
+        frame_layout.addLayout(num_row)
+
+        layout.addWidget(frame)
+        layout.addStretch()
+
+        # Simpan sebagai template
+        tmpl_frame = QFrame()
+        tmpl_frame.setObjectName("card")
+        tmpl_layout = QHBoxLayout(tmpl_frame)
+        self._save_as_template = QCheckBox("Simpan konfigurasi ini sebagai template")
+        tmpl_layout.addWidget(self._save_as_template)
+        tmpl_layout.addWidget(QLabel("Nama template:"))
+        self._template_name = QLineEdit()
+        self._template_name.setPlaceholderText("Nama template...")
+        self._template_name.setEnabled(False)
+        self._save_as_template.toggled.connect(self._template_name.setEnabled)
+        tmpl_layout.addWidget(self._template_name)
+        layout.addWidget(tmpl_frame)
+
+        return w
+
+    def _build_step_review(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(12)
+
+        lbl = QLabel("Review Konfigurasi")
+        lbl.setObjectName("sectionHeader")
+        layout.addWidget(lbl)
+
+        self._review_text = QTextEdit()
+        self._review_text.setReadOnly(True)
+        self._review_text.setObjectName("logArea")
+        self._review_text.setMinimumHeight(300)
+        layout.addWidget(self._review_text)
+
+        layout.addStretch()
+        return w
+
+    # ------------------------------------------------------------------ navigation
+
+    def _go_next(self):
+        if self._current_step < len(self.STEPS) - 1:
+            if not self._validate_current_step():
+                return
+            self._current_step += 1
+            self._update_step_ui()
+        if self._current_step == len(self.STEPS) - 1:
+            self._populate_review()
+
+    def _go_back(self):
+        if self._current_step > 0:
+            self._current_step -= 1
+            self._update_step_ui()
+
+    def _update_step_ui(self):
+        self._step_indicator.set_step(self._current_step)
+        self._content_stack.setCurrentIndex(self._current_step)
+        self._btn_back.setEnabled(self._current_step > 0)
+        is_last = self._current_step == len(self.STEPS) - 1
+        self._btn_next.setVisible(not is_last)
+        self._btn_run.setVisible(is_last)
+
+    def _validate_current_step(self) -> bool:
+        if self._current_step == 0:
+            if not self._job_name.text().strip():
+                QMessageBox.warning(self, "Nama Job Kosong", "Isi nama job terlebih dahulu.")
+                return False
+        elif self._current_step == 2:  # mapping
+            if self._key_table.rowCount() == 0:
+                QMessageBox.warning(
+                    self, "Key Kolom Belum Diisi",
+                    "Tambahkan minimal 1 kolom key untuk proses perbandingan."
+                )
+                return False
+            if self._cmp_table.rowCount() == 0:
+                QMessageBox.warning(
+                    self, "Kolom Compare Belum Diisi",
+                    "Tambahkan minimal 1 kolom yang akan dibandingkan."
+                )
+                return False
+        return True
+
+    # ------------------------------------------------------------------ mapping helpers
+
+    def _on_left_headers(self, headers: List[str]):
+        self._key_left_combo.clear()
+        self._key_left_combo.addItems(headers)
+        self._cmp_left_combo.clear()
+        self._cmp_left_combo.addItems(headers)
+
+    def _on_right_headers(self, headers: List[str]):
+        self._key_right_combo.clear()
+        self._key_right_combo.addItems(headers)
+        self._cmp_right_combo.clear()
+        self._cmp_right_combo.addItems(headers)
+
+    def _add_key_mapping(self):
+        left = self._key_left_combo.currentText()
+        right = self._key_right_combo.currentText()
+        if left and right:
+            self._add_row_to_table(self._key_table, left, right)
+
+    def _add_compare_mapping(self):
+        left = self._cmp_left_combo.currentText()
+        right = self._cmp_right_combo.currentText()
+        if left and right:
+            self._add_row_to_table(self._cmp_table, left, right)
+
+    def _add_all_compare(self):
+        left_headers = self._left_source.get_headers()
+        right_headers = self._right_source.get_headers()
+        key_lefts = self._get_key_columns_left()
+        for lh in left_headers:
+            if lh in key_lefts:
+                continue
+            rh = lh if lh in right_headers else (right_headers[0] if right_headers else lh)
+            self._add_row_to_table(self._cmp_table, lh, rh)
+
+    def _add_row_to_table(self, table: QTableWidget, left: str, right: str):
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem(left))
+        table.setItem(row, 1, QTableWidgetItem(right))
+        del_btn = QPushButton("✕")
+        del_btn.setObjectName("dangerBtn")
+        del_btn.setFixedSize(28, 28)
+        del_btn.clicked.connect(lambda r=row, t=table: self._remove_mapping_row(t, r))
+        table.setCellWidget(row, 2, del_btn)
+
+    def _remove_mapping_row(self, table: QTableWidget, row: int):
+        # Cari baris yang benar (row mungkin sudah bergeser)
+        sender = self.sender()
+        for r in range(table.rowCount()):
+            widget = table.cellWidget(r, 2)
+            if widget is sender:
+                table.removeRow(r)
+                break
+
+    def _get_key_columns_left(self) -> List[str]:
+        result = []
+        for r in range(self._key_table.rowCount()):
+            item = self._key_table.item(r, 0)
+            if item:
+                result.append(item.text())
+        return result
+
+    def _get_mappings_from_table(self, table: QTableWidget) -> List[ColumnMapping]:
+        result = []
+        for r in range(table.rowCount()):
+            left = table.item(r, 0)
+            right = table.item(r, 1)
+            if left and right:
+                result.append(ColumnMapping(left.text(), right.text()))
+        return result
+
+    # ------------------------------------------------------------------ review
+
+    def _populate_review(self):
+        cfg = self._build_config()
+        lines = [
+            f"Nama Job    : {self._job_name.text()}",
+            f"Mode        : {'File vs File' if self._job_type == JOB_TYPE_FILE_VS_FILE else 'File vs PostgreSQL'}",
+            "",
+            "=== Sumber Kiri ===",
+            f"  Tipe    : {cfg.left_source.source_type}",
+        ]
+        if cfg.left_source.file_path:
+            lines.append(f"  File    : {cfg.left_source.file_path}")
+        if cfg.left_source.sheet_name:
+            lines.append(f"  Sheet   : {cfg.left_source.sheet_name}")
+
+        lines += [
+            "",
+            "=== Sumber Kanan ===",
+            f"  Tipe    : {cfg.right_source.source_type}",
+        ]
+        if cfg.right_source.file_path:
+            lines.append(f"  File    : {cfg.right_source.file_path}")
+
+        lines += [
+            "",
+            "=== Kolom Key ===",
+        ]
+        for m in cfg.key_columns:
+            lines.append(f"  {m.left_col}  ↔  {m.right_col}")
+
+        lines += [
+            "",
+            "=== Kolom Dibandingkan ===",
+        ]
+        for m in cfg.compare_columns:
+            lines.append(f"  {m.left_col}  ↔  {m.right_col}")
+
+        lines += [
+            "",
+            "=== Opsi ===",
+            f"  Trim whitespace     : {'Ya' if cfg.options.trim_whitespace else 'Tidak'}",
+            f"  Ignore case         : {'Ya' if cfg.options.ignore_case else 'Tidak'}",
+            f"  Kosong = NULL       : {'Ya' if cfg.options.treat_empty_as_null else 'Tidak'}",
+            f"  Normalisasi tanggal : {'Ya' if cfg.options.normalize_date else 'Tidak'}",
+            f"  Normalisasi angka   : {'Ya' if cfg.options.normalize_number else 'Tidak'}",
+        ]
+
+        self._review_text.setPlainText("\n".join(lines))
+
+    # ------------------------------------------------------------------ build & submit
+
+    def _build_config(self) -> CompareConfig:
+        cfg = CompareConfig()
+        cfg.job_type = self._job_type
+        cfg.left_source = self._left_source.get_source_config()
+        cfg.right_source = self._right_source.get_source_config()
+        cfg.key_columns = self._get_mappings_from_table(self._key_table)
+        cfg.compare_columns = self._get_mappings_from_table(self._cmp_table)
+        cfg.options = CompareOptions(
+            trim_whitespace=self._opt_trim.isChecked(),
+            ignore_case=self._opt_case.isChecked(),
+            treat_empty_as_null=self._opt_null.isChecked(),
+            normalize_date=self._opt_date.isChecked(),
+            normalize_number=self._opt_num.isChecked(),
+            date_format=self._date_fmt.currentText(),
+            decimal_places=self._decimal_places.value(),
+        )
+        return cfg
+
+    def _submit_job(self):
+        config = self._build_config()
+        job = CompareJob(
+            name=self._job_name.text().strip(),
+            job_type=self._job_type,
+            status=JOB_STATUS_QUEUED,
+            config=config.to_dict(),
+        )
+        self._job_manager.save(job)
+        self.job_submitted.emit(job, config)
+        self._reset_form()
+
+    def _reset_form(self):
+        self._current_step = 0
+        self._update_step_ui()
+        self._job_name.clear()
+        self._key_table.setRowCount(0)
+        self._cmp_table.setRowCount(0)
+
+    def set_initial_job_type(self, job_type: str):
+        """Set tipe job dari luar (misal dari quick start dashboard)."""
+        self._job_type = job_type
+        self._select_mode(job_type)
