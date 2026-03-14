@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
+# Website : https://narayadigital.co.id
+# All rights reserved.
 """
 core/normalization_engine.py
 Engine normalisasi data sebelum proses perbandingan.

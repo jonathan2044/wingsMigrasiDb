@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
+# Website : https://narayadigital.co.id
+# All rights reserved.
 """
 ui/pages/settings_page.py
 Halaman pengaturan aplikasi - koneksi PostgreSQL, preferensi, info aplikasi.

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
+# Website : https://narayadigital.co.id
+# All rights reserved.
 """
 services/postgres_connector.py
 Service untuk koneksi dan query ke database PostgreSQL.

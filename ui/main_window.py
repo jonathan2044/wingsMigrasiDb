@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
+# Website : https://narayadigital.co.id
+# All rights reserved.
 """
 ui/main_window.py
 Jendela utama aplikasi Data Compare Tool.

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
+# Website : https://narayadigital.co.id
+# All rights reserved.
 """
 workers/compare_worker.py
 Worker thread untuk proses perbandingan data di background.

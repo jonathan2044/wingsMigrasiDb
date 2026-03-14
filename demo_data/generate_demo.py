@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
+# Website : https://narayadigital.co.id
+# All rights reserved.
 """
 demo_data/generate_demo.py
 Script untuk membuat file demo Excel & CSV untuk pengujian aplikasi.

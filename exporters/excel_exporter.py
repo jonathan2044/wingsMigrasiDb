@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
+# Website : https://narayadigital.co.id
+# All rights reserved.
 """
 exporters/excel_exporter.py
 Export hasil perbandingan ke file Excel dengan format yang rapi.
