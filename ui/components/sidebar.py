@@ -129,7 +129,7 @@ class Sidebar(QWidget):
         )
 
         # --- Version (very subtle) ---
-        version_lbl = QLabel("v1.0")
+        version_lbl = QLabel("JN")
         version_lbl.setObjectName("sidebarVersionLabel")
         version_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         version_lbl.setStyleSheet(

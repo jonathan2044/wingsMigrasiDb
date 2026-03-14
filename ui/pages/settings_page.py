@@ -309,9 +309,9 @@ class SettingsPage(QWidget):
             "• Proses data hingga ratusan ribu baris<br>"
             "• Export hasil ke Excel/CSV<br>"
             "• Template konfigurasi tersimpan<br>"
-            "• Riwayat pekerjaan lengkap<br><br>"
+            "• Riwayat Job yang Sudah Dijalankan<br><br>"
             "<b>Tech Stack:</b> Python, PySide6, DuckDB, Pandas<br><br>"
-            "© 2026 Jonathan Narendra - PT Naraya Prisma Digital"
+            "© 2026 JN - Timnya Mas Abdan (4281)"
         )
         about.setWordWrap(True)
         about.setStyleSheet("line-height: 1.6;")
