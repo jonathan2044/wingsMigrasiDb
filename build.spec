@@ -249,7 +249,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='DataCompareTool',
+    name='SFACompareTool',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -273,5 +273,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=UPX_EXCLUDE,
-    name='DataCompareTool',
+    name='SFACompareTool',
 )

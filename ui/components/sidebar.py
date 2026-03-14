@@ -57,14 +57,17 @@ class Sidebar(QWidget):
         header_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         # --- Logo (centered, no background square) ---
-        _base_dir = (
-            Path(sys.executable).parent if getattr(sys, "frozen", False)
-            else Path(__file__).parent.parent.parent
-        )
+        if getattr(sys, "frozen", False):
+            # PyInstaller frozen: coba sys._MEIPASS dulu, fallback ke exe parent
+            _base_dir = Path(getattr(sys, "_MEIPASS", str(Path(sys.executable).parent)))
+            _avatar_path = _base_dir / "avatar.png"
+            if not _avatar_path.exists():
+                _avatar_path = Path(sys.executable).parent / "avatar.png"
+        else:
+            _avatar_path = Path(__file__).parent.parent.parent / "avatar.png"
         icon_lbl = QLabel()
         icon_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         icon_lbl.setStyleSheet("background: transparent; border: none;")
-        _avatar_path = _base_dir / "avatar.png"
         if _avatar_path.exists():
             _SIZE = 110
             _BORDER = 3

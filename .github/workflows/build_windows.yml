@@ -56,9 +56,9 @@ jobs:
       # ── 6. Siapkan struktur portable ──────────────────────────────────────
       - name: Prepare portable structure
         run: |
-          copy /y "_portable" "dist\DataCompareTool\_portable"
-          if not exist "dist\DataCompareTool\AppData" mkdir "dist\DataCompareTool\AppData"
-          if not exist "dist\DataCompareTool\AppData\logs" mkdir "dist\DataCompareTool\AppData\logs"
+          copy /y "_portable" "dist\SFACompareTool\_portable"
+          if not exist "dist\SFACompareTool\AppData" mkdir "dist\SFACompareTool\AppData"
+          if not exist "dist\SFACompareTool\AppData\logs" mkdir "dist\SFACompareTool\AppData\logs"
         shell: cmd
 
       # ── 7. Tentukan nama versi ─────────────────────────────────────────────
@@ -78,8 +78,8 @@ jobs:
       - name: Zip portable folder
         run: |
           $ver = "${{ steps.version.outputs.VER }}"
-          $zipName = "DataCompareTool-$ver-windows-portable.zip"
-          Compress-Archive -Path "dist\DataCompareTool\*" -DestinationPath $zipName -Force
+          $zipName = "SFACompareTool-$ver-windows-portable.zip"
+          Compress-Archive -Path "dist\SFACompareTool\*" -DestinationPath $zipName -Force
           echo "ZIP_NAME=$zipName" >> $env:GITHUB_OUTPUT
         id: zip
         shell: pwsh
@@ -88,7 +88,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DataCompareTool-${{ steps.version.outputs.VER }}-windows-portable
+          name: SFACompareTool-${{ steps.version.outputs.VER }}-windows-portable
           path: ${{ steps.zip.outputs.ZIP_NAME }}
           retention-days: 30
 
@@ -103,7 +103,7 @@ jobs:
             ## SFA Compare Tool ${{ steps.version.outputs.VER }}
 
             ### Download
-            Unduh file zip di bawah, ekstrak, lalu jalankan `DataCompareTool.exe`.
+            Unduh file zip di bawah, ekstrak, lalu jalankan `SFACompareTool.exe`.
 
             ### Catatan
             - Portable — tidak perlu install, data tersimpan di folder `AppData\` di samping `.exe`
