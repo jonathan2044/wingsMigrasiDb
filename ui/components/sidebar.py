@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QFrame, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtGui import QFont, QPixmap, QPainter, QBrush, QColor, QPen, QPainterPath
 
 from ui.styles import COLOR_SIDEBAR_BG, COLOR_SIDEBAR_TEXT
 
@@ -50,53 +50,99 @@ class Sidebar(QWidget):
 
         # ---- Header ----
         header = QWidget()
-        header.setStyleSheet(f"background-color: #152c4a; padding: 0;")
+        header.setStyleSheet("background-color: #152c4a;")
         header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(12, 20, 12, 16)
-        header_layout.setSpacing(2)
+        header_layout.setContentsMargins(16, 24, 16, 20)
+        header_layout.setSpacing(0)
+        header_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        # Avatar logo
+        # --- Logo (centered, no background square) ---
         _base_dir = (
             Path(sys.executable).parent if getattr(sys, "frozen", False)
             else Path(__file__).parent.parent.parent
         )
         icon_lbl = QLabel()
-        icon_lbl.setStyleSheet("background: transparent;")
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        icon_lbl.setStyleSheet("background: transparent; border: none;")
         _avatar_path = _base_dir / "avatar.png"
         if _avatar_path.exists():
-            _pix = QPixmap(str(_avatar_path))
-            _pix = _pix.scaled(
-                72, 72,
-                Qt.AspectRatioMode.KeepAspectRatio,
+            _SIZE = 110
+            _BORDER = 3
+            _TOTAL = _SIZE + _BORDER * 2
+
+            # Crop source image into a square first, then scale
+            _src = QPixmap(str(_avatar_path))
+            _side = min(_src.width(), _src.height())
+            _src = _src.copy(
+                (_src.width() - _side) // 2,
+                (_src.height() - _side) // 2,
+                _side, _side,
+            )
+            _src = _src.scaled(
+                _SIZE, _SIZE,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-            icon_lbl.setPixmap(_pix)
-            icon_lbl.setFixedSize(72, 72)
+
+            # Paint circular clip + ring border onto a transparent canvas
+            _canvas = QPixmap(_TOTAL, _TOTAL)
+            _canvas.fill(Qt.GlobalColor.transparent)
+            _painter = QPainter(_canvas)
+            _painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            # Draw ring border (semi-transparent white)
+            _pen = QPen(QColor(255, 255, 255, 60))
+            _pen.setWidth(_BORDER * 2)
+            _painter.setPen(_pen)
+            _painter.setBrush(Qt.BrushStyle.NoBrush)
+            _painter.drawEllipse(_BORDER, _BORDER, _SIZE, _SIZE)
+
+            # Clip to circle and draw image
+            _path = QPainterPath()
+            _path.addEllipse(_BORDER, _BORDER, _SIZE, _SIZE)
+            _painter.setClipPath(_path)
+            _painter.drawPixmap(_BORDER, _BORDER, _src)
+            _painter.end()
+
+            icon_lbl.setPixmap(_canvas)
+            icon_lbl.setFixedSize(_TOTAL, _TOTAL)
         else:
             icon_lbl.setText("⚡")
-            icon_lbl.setStyleSheet("color: #60a5fa; font-size: 20px; background: transparent;")
+            icon_lbl.setStyleSheet("color: #60a5fa; font-size: 24px; background: transparent;")
 
+        # --- App name ---
         title = QLabel("SFA Compare Tool")
         title.setObjectName("sidebarTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         title.setStyleSheet(
-            "color: white; font-size: 15px; font-weight: bold; background: transparent;"
+            "color: #ffffff; font-size: 14px; font-weight: bold;"
+            " background: transparent; border: none; letter-spacing: 0.5px;"
         )
 
+        # --- Subtitle ---
         by_lbl = QLabel("By Timnya Mas Abdan - 4281")
         by_lbl.setObjectName("sidebarSubtitle")
+        by_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         by_lbl.setStyleSheet(
-            f"color: {COLOR_SIDEBAR_TEXT}; font-size: 9px; background: transparent;"
+            "color: rgba(148, 163, 184, 0.85); font-size: 9px;"
+            " background: transparent; border: none;"
         )
 
+        # --- Version (very subtle) ---
         version_lbl = QLabel("v1.0")
         version_lbl.setObjectName("sidebarVersionLabel")
+        version_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         version_lbl.setStyleSheet(
-            "color: #94a3b8; font-size: 9px; background: transparent;"
+            "color: rgba(148, 163, 184, 0.45); font-size: 8px;"
+            " background: transparent; border: none;"
         )
 
-        header_layout.addWidget(icon_lbl)
+        header_layout.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
+        header_layout.addSpacing(10)
         header_layout.addWidget(title)
+        header_layout.addSpacing(4)
         header_layout.addWidget(by_lbl)
+        header_layout.addSpacing(6)
         header_layout.addWidget(version_lbl)
         layout.addWidget(header)
 

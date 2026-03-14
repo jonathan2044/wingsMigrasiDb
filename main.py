@@ -65,6 +65,13 @@ def main():
     # Paksa Fusion style agar QSS stylesheet sepenuhnya dihormati di semua platform
     # (macOS native style mengabaikan background-color dan color pada QPushButton)
     app.setStyle(QStyleFactory.create("Fusion"))
+
+    # Set app icon (dock macOS, taskbar Windows, title bar)
+    from PySide6.QtGui import QIcon
+    _icon_path = project_dir / "avatar.png"
+    if _icon_path.exists():
+        app.setWindowIcon(QIcon(str(_icon_path)))
+
     app.setApplicationName("SFA Compare Tool")
     app.setApplicationVersion(settings.APP_VERSION)
     app.setOrganizationName("PT Naraya Prisma Digital")
