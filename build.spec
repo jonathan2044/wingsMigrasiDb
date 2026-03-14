@@ -19,9 +19,37 @@ project_dir = Path(SPECPATH)
 # collect_all menangani .dll/.pyd/data yang dibutuhkan DuckDB
 duckdb_datas, duckdb_binaries, duckdb_hidden = collect_all('duckdb')
 
-# ─── Kumpulkan Qt platform plugins & resources PySide6 ───────────────────────
-# Diperlukan agar qwindows.dll (Windows platform plugin) ikut terbawa
-pyside6_datas = collect_data_files('PySide6')
+# ─── Kumpulkan HANYA plugin & resource PySide6 yang dibutuhkan ───────────────
+# JANGAN pakai collect_data_files('PySide6') — itu tarik semua Qt (~200MB+)
+# Kita hanya butuh: platform plugin (qwindows), styles plugin, dan translations minimal
+from PyInstaller.utils.hooks import collect_data_files as _cdf
+import os as _os, sys as _sys
+
+def _pyside6_dir():
+    """Cari folder instalasi PySide6."""
+    try:
+        import PySide6
+        return _os.path.dirname(PySide6.__file__)
+    except Exception:
+        return None
+
+_p6 = _pyside6_dir()
+pyside6_datas = []
+if _p6:
+    # Platform plugin — wajib untuk jalan di Windows
+    _plugins = _os.path.join(_p6, 'plugins')
+    for _sub in ('platforms', 'styles', 'imageformats', 'iconengines'):
+        _d = _os.path.join(_plugins, _sub)
+        if _os.path.isdir(_d):
+            pyside6_datas.append((_d, f'PySide6/plugins/{_sub}'))
+    # Qt.conf jika ada (lokasi relatif plugin)
+    _qtconf = _os.path.join(_p6, 'qt.conf')
+    if _os.path.isfile(_qtconf):
+        pyside6_datas.append((_qtconf, 'PySide6'))
+    # Resources folder (translations dll tidak perlu, tapi folder harus ada)
+    _res = _os.path.join(_p6, 'resources')
+    if _os.path.isdir(_res):
+        pyside6_datas.append((_res, 'PySide6/resources'))
 
 # ─── Data statis project ─────────────────────────────────────────────────────
 extra_datas = [
@@ -160,6 +188,52 @@ a = Analysis(
         'ftplib', 'imaplib', 'poplib', 'smtplib', 'telnetlib', 'xmlrpc',
         # Data science — tidak dipakai
         'matplotlib', 'scipy', 'sklearn', 'PIL', 'IPython', 'notebook',
+        # Modul Qt besar yang tidak dipakai (hemat ~100MB+)
+        'PySide6.QtWebEngine',
+        'PySide6.QtWebEngineCore',
+        'PySide6.QtWebEngineWidgets',
+        'PySide6.QtWebEngineQuick',
+        'PySide6.Qt3DCore',
+        'PySide6.Qt3DRender',
+        'PySide6.Qt3DInput',
+        'PySide6.Qt3DLogic',
+        'PySide6.Qt3DAnimation',
+        'PySide6.Qt3DExtras',
+        'PySide6.QtMultimedia',
+        'PySide6.QtMultimediaWidgets',
+        'PySide6.QtLocation',
+        'PySide6.QtPositioning',
+        'PySide6.QtSensors',
+        'PySide6.QtBluetooth',
+        'PySide6.QtNfc',
+        'PySide6.QtWebSockets',
+        'PySide6.QtWebChannel',
+        'PySide6.QtDataVisualization',
+        'PySide6.QtCharts',
+        'PySide6.QtQuick',
+        'PySide6.QtQuickWidgets',
+        'PySide6.QtQuick3D',
+        'PySide6.QtQml',
+        'PySide6.QtDesigner',
+        'PySide6.QtHelp',
+        'PySide6.QtTest',
+        'PySide6.QtSql',
+        'PySide6.QtOpenGL',
+        'PySide6.QtOpenGLWidgets',
+        'PySide6.QtSvg',
+        'PySide6.QtSvgWidgets',
+        'PySide6.QtConcurrent',
+        'PySide6.QtDBus',
+        'PySide6.QtUiTools',
+        'PySide6.QtAxContainer',
+        'PySide6.QtPdf',
+        'PySide6.QtPdfWidgets',
+        'PySide6.QtStateMachine',
+        'PySide6.QtRemoteObjects',
+        'PySide6.QtScxml',
+        'PySide6.QtTextToSpeech',
+        'PySide6.QtNetwork',
+        'PySide6.QtNetworkAuth',
     ],
     noarchive=False,
     optimize=1,
