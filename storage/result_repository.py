@@ -218,9 +218,10 @@ class ResultRepository:
             # Parameterized COPY belum didukung DuckDB, escape manual (nilai dari konstanta internal)
             safe = status_filter.replace("'", "''")
             where = f"WHERE status = '{safe}'"
+        safe_path = path.replace("'", "''")
         self._conn.execute(
             f"COPY (SELECT * FROM compare_results {where} ORDER BY row_id) "
-            f"TO '{path}' (FORMAT CSV, HEADER TRUE)"
+            f"TO '{safe_path}' (FORMAT CSV, HEADER TRUE)"
         )
         logger.info("Export CSV selesai: %s", path)
 

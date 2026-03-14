@@ -168,17 +168,6 @@ class CSVReader:
         if not self._path.exists():
             raise FileReaderError(f"File tidak ditemukan: {file_path}")
 
-    def estimate_row_count(self) -> int:
-        """Estimasi jumlah baris data dengan hitung newline (minus header)."""
-        try:
-            count = 0
-            with open(self._path, "r", encoding=self._encoding, errors="replace") as f:
-                for _ in f:
-                    count += 1
-            return max(0, count - 1)
-        except Exception:
-            return 0
-
     def get_headers(self) -> List[str]:
         """Ambil nama kolom dari baris pertama."""
         try:
