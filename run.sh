@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHONW="$(dirname "$(which python3)")/pythonw"
 
 if [ ! -f "$PYTHONW" ]; then
-    # fallback: cari manual di Anaconda
-    PYTHONW="/Users/akazaya/opt/anaconda3/bin/pythonw"
+    # fallback: cari di lokasi Anaconda standar
+    PYTHONW="$HOME/opt/anaconda3/bin/pythonw"
 fi
 
 if [ ! -f "$PYTHONW" ]; then

@@ -209,7 +209,9 @@ python main.py
 
 > **macOS khusus:** Gunakan `pythonw` agar window muncul dengan benar:
 > ```bash
-> /Users/akazaya/opt/anaconda3/bin/pythonw main.py
+> pythonw main.py
+> # atau jika pakai Anaconda:
+> ~/opt/anaconda3/bin/pythonw main.py
 > ```
 > `python3` biasa di macOS adalah command-line process — macOS tidak menampilkan window-nya ke depan secara otomatis.
 
