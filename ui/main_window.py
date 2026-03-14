@@ -70,10 +70,21 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ setup
 
     def _setup_window(self):
-        self.setWindowTitle("Data Compare Tool")
+        self.setWindowTitle("SFA Compare Tool")
         self.setMinimumSize(1100, 700)
         self.resize(1280, 800)
         self.setStyleSheet(MAIN_STYLESHEET)
+
+        # Set window icon (taskbar & title bar)
+        import sys
+        from pathlib import Path
+        _base = (
+            Path(sys.executable).parent if getattr(sys, "frozen", False)
+            else Path(__file__).parent.parent
+        )
+        _ico = _base / "avatar.png"
+        if _ico.exists():
+            self.setWindowIcon(QIcon(str(_ico)))
 
         # Center window
         from PySide6.QtGui import QScreen

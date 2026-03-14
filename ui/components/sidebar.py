@@ -7,6 +7,8 @@ Komponen sidebar navigasi aplikasi.
 """
 
 from __future__ import annotations
+import sys
+from pathlib import Path
 from typing import Callable, List, Tuple
 
 from PySide6.QtWidgets import (
@@ -14,7 +16,7 @@ from PySide6.QtWidgets import (
     QFrame, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QPixmap
 
 from ui.styles import COLOR_SIDEBAR_BG, COLOR_SIDEBAR_TEXT
 
@@ -53,24 +55,49 @@ class Sidebar(QWidget):
         header_layout.setContentsMargins(12, 20, 12, 16)
         header_layout.setSpacing(2)
 
-        icon_lbl = QLabel("⚡")
-        icon_lbl.setStyleSheet("color: #60a5fa; font-size: 20px; background: transparent;")
+        # Avatar logo
+        _base_dir = (
+            Path(sys.executable).parent if getattr(sys, "frozen", False)
+            else Path(__file__).parent.parent.parent
+        )
+        icon_lbl = QLabel()
+        icon_lbl.setStyleSheet("background: transparent;")
+        _avatar_path = _base_dir / "avatar.png"
+        if _avatar_path.exists():
+            _pix = QPixmap(str(_avatar_path))
+            _pix = _pix.scaled(
+                72, 72,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            icon_lbl.setPixmap(_pix)
+            icon_lbl.setFixedSize(72, 72)
+        else:
+            icon_lbl.setText("⚡")
+            icon_lbl.setStyleSheet("color: #60a5fa; font-size: 20px; background: transparent;")
 
-        title = QLabel("Data Compare")
+        title = QLabel("SFA Compare Tool")
         title.setObjectName("sidebarTitle")
         title.setStyleSheet(
             "color: white; font-size: 15px; font-weight: bold; background: transparent;"
         )
 
-        subtitle = QLabel("Tool v1.0")
-        subtitle.setObjectName("sidebarSubtitle")
-        subtitle.setStyleSheet(
-            f"color: {COLOR_SIDEBAR_TEXT}; font-size: 10px; background: transparent;"
+        by_lbl = QLabel("By Timnya Mas Abdan - 4281")
+        by_lbl.setObjectName("sidebarSubtitle")
+        by_lbl.setStyleSheet(
+            f"color: {COLOR_SIDEBAR_TEXT}; font-size: 9px; background: transparent;"
+        )
+
+        version_lbl = QLabel("v1.0")
+        version_lbl.setObjectName("sidebarVersionLabel")
+        version_lbl.setStyleSheet(
+            "color: #94a3b8; font-size: 9px; background: transparent;"
         )
 
         header_layout.addWidget(icon_lbl)
         header_layout.addWidget(title)
-        header_layout.addWidget(subtitle)
+        header_layout.addWidget(by_lbl)
+        header_layout.addWidget(version_lbl)
         layout.addWidget(header)
 
         # Divider

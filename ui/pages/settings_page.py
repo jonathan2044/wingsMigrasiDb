@@ -301,7 +301,7 @@ class SettingsPage(QWidget):
         layout.setSpacing(12)
 
         about = QLabel(
-            "<b>Data Compare Tool</b> v1.0.0<br><br>"
+            "<b>SFA Compare Tool</b> v1.0.0<br><br>"
             "Aplikasi desktop untuk membandingkan data dalam skala besar.<br><br>"
             "<b>Fitur utama:</b><br>"
             "• Perbandingan File Excel/CSV vs File Excel/CSV<br>"
@@ -311,7 +311,7 @@ class SettingsPage(QWidget):
             "• Template konfigurasi tersimpan<br>"
             "• Riwayat pekerjaan lengkap<br><br>"
             "<b>Tech Stack:</b> Python, PySide6, DuckDB, Pandas<br><br>"
-            "© 2024 Internal Tools"
+            "© 2026 Jonathan Narendra - PT Naraya Prisma Digital"
         )
         about.setWordWrap(True)
         about.setStyleSheet("line-height: 1.6;")

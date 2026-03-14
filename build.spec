@@ -55,6 +55,8 @@ if _p6:
 extra_datas = [
     # File _portable WAJIB ada di samping .exe agar mode portable aktif
     (str(project_dir / '_portable'), '.'),
+    # Logo / branding aplikasi
+    (str(project_dir / 'avatar.png'), '.'),
 ]
 if (project_dir / 'assets').exists() and any((project_dir / 'assets').iterdir()):
     extra_datas.append((str(project_dir / 'assets'), 'assets'))

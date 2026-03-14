@@ -81,7 +81,7 @@ class ExcelExporter:
         title_font = Font(bold=True, size=14)
         header_font = Font(bold=True, size=11)
 
-        ws["A1"] = "Data Compare Tool - Ringkasan Hasil"
+        ws["A1"] = "SFA Compare Tool - Ringkasan Hasil"
         ws["A1"].font = title_font
         ws["A2"] = f"Nama Job: {job_name}"
         ws["A2"].font = Font(size=10)

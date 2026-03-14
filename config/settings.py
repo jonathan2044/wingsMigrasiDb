@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class AppSettings:
     """Pengaturan utama aplikasi - path, database, dan preferensi."""
 
-    APP_NAME = "DataCompareTool"
+    APP_NAME = "SFACompareTool"
     APP_VERSION = "1.0.0"
 
     def __init__(self):

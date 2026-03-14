@@ -49,7 +49,7 @@ def main():
     _setup_logging(settings.data_dir / "logs")
 
     logger = logging.getLogger(__name__)
-    logger.info("Memulai Data Compare Tool v%s ...", settings.APP_VERSION)
+    logger.info("Memulai SFA Compare Tool v%s ...", settings.APP_VERSION)
     logger.info("Data dir: %s", settings.data_dir)
 
     # Inisialisasi storage DB
@@ -65,9 +65,9 @@ def main():
     # Paksa Fusion style agar QSS stylesheet sepenuhnya dihormati di semua platform
     # (macOS native style mengabaikan background-color dan color pada QPushButton)
     app.setStyle(QStyleFactory.create("Fusion"))
-    app.setApplicationName("Data Compare Tool")
+    app.setApplicationName("SFA Compare Tool")
     app.setApplicationVersion(settings.APP_VERSION)
-    app.setOrganizationName("Internal Tools")
+    app.setOrganizationName("PT Naraya Prisma Digital")
 
     # macOS: set activation policy agar proses dikenali sebagai GUI app
     if sys.platform == "darwin":
