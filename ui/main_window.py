@@ -265,6 +265,10 @@ class MainWindow(QMainWindow):
         if job:
             self._result_page.on_job_completed(job)
 
+        # Pastikan user diarahkan ke halaman result untuk melihat ringkasan
+        self._navigate_to("result")
+        self._sidebar.set_active("")
+
         # Update dashboard bila sedang tampil
         if self._page_stack.currentIndex() == 0:
             self._dashboard.refresh()
@@ -275,6 +279,10 @@ class MainWindow(QMainWindow):
         job = self._job_manager.get_by_id(job_id)
         if job:
             self._result_page.load_job(job)
+
+        # Pastikan user diarahkan ke halaman result agar bisa lihat error
+        self._navigate_to("result")
+        self._sidebar.set_active("")
 
         QMessageBox.critical(
             self, "Proses Gagal",

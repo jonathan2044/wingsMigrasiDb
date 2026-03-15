@@ -584,9 +584,23 @@ class _FileSourceCard(QFrame):
         try:
             if is_csv:
                 from services.file_reader import CSVReader
-                sep_map = {0: ",", 1: ";", 2: "\t", 3: "|"}
-                sep = sep_map.get(self._csv_sep.currentIndex(), ",")
+                import csv as _csv
                 enc = self._csv_enc.currentText()
+                sep_map = {0: ",", 1: ";", 2: "\t", 3: "|"}
+                rev_sep_map = {",": 0, ";": 1, "\t": 2, "|": 3}
+                # Auto-detect separator from file content and update dropdown
+                try:
+                    with open(path, "r", encoding=enc, errors="replace") as _f:
+                        _sample = _f.read(8192)
+                    _dialect = _csv.Sniffer().sniff(_sample, delimiters=",;\t|")
+                    _detected = _dialect.delimiter
+                    if _detected in rev_sep_map:
+                        self._csv_sep.blockSignals(True)
+                        self._csv_sep.setCurrentIndex(rev_sep_map[_detected])
+                        self._csv_sep.blockSignals(False)
+                except Exception:
+                    pass  # keep user's manual selection
+                sep = sep_map.get(self._csv_sep.currentIndex(), ",")
                 reader = CSVReader(path, sep, enc)
                 preview_df = reader.preview()          # baca semua baris
                 headers = list(preview_df.columns)
