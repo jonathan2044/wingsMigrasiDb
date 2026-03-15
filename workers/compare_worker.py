@@ -162,10 +162,16 @@ class CompareWorker(QThread):
                     + (f" | Key Duplikat: {_dup_cnt:,} (baris ini dikecualikan dari perbandingan)" if _dup_cnt > 0 else "")
                 )
 
-                self.job_completed.emit(job_id, summary)
+                # Tandai selesai; emit dilakukan SETELAH conn.close()
+                # agar file data.duckdb pasti tidak terkunci saat UI
+                # membuka ResultRepository (kritis di Windows)
+                _completed_summary = summary
 
             finally:
                 conn.close()
+
+            # Emit di sini — koneksi DuckDB sudah ditutup
+            self.job_completed.emit(job_id, _completed_summary)
 
         except InterruptedError as e:
             self._log(f"[DIBATALKAN] {e}")

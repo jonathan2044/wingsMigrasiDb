@@ -239,18 +239,8 @@ class MainWindow(QMainWindow):
         worker = CompareWorker(job, config, self._settings, self._job_manager)
         self._active_workers[job.id] = worker
 
-        worker.progress.connect(
-            lambda step, done, total, j=job: (
-                self._result_page.show_progress(step, done, total)
-                if self._result_page.isVisible() else None
-            )
-        )
-        worker.log_message.connect(
-            lambda msg: (
-                self._result_page.append_log(msg)
-                if self._result_page.isVisible() else None
-            )
-        )
+        worker.progress.connect(self._result_page.show_progress)
+        worker.log_message.connect(self._result_page.append_log)
         worker.job_completed.connect(self._on_job_completed)
         worker.job_failed.connect(self._on_job_failed)
         worker.finished.connect(lambda: self._cleanup_worker(job.id))
@@ -261,9 +251,12 @@ class MainWindow(QMainWindow):
     def _on_job_completed(self, job_id: str, summary: dict):
         """Dipanggil ketika job selesai."""
         logger.info("Job selesai: %s | summary: %s", job_id, summary)
-        job = self._job_manager.get_by_id(job_id)
-        if job:
-            self._result_page.on_job_completed(job)
+        try:
+            job = self._job_manager.get_by_id(job_id)
+            if job:
+                self._result_page.on_job_completed(job)
+        except Exception as exc:
+            logger.error("Error menampilkan hasil job %s: %s", job_id, exc, exc_info=True)
 
         # Pastikan user diarahkan ke halaman result untuk melihat ringkasan
         self._navigate_to("result")
