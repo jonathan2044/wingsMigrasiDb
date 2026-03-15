@@ -45,7 +45,10 @@ class ExcelReader:
         sheet_name: str = 0,
         skip_rows: int = 0,
     ) -> List[str]:
-        """Ambil nama kolom (header) dari sheet tertentu."""
+        """Ambil nama kolom (header) dari sheet tertentu.
+        Nama kolom dikembalikan dalam bentuk ter-sanitasi agar konsisten
+        dengan nama kolom yang tersimpan di tabel DuckDB.
+        """
         try:
             df = pd.read_excel(
                 self._path,
@@ -54,7 +57,7 @@ class ExcelReader:
                 nrows=0,
                 engine="openpyxl",
             )
-            return list(df.columns)
+            return [_sanitize_col(c) for c in df.columns]
         except Exception as e:
             raise FileReaderError(f"Gagal membaca header: {e}") from e
 
@@ -154,6 +157,14 @@ class ExcelReader:
             if progress_callback:
                 progress_callback(total_rows)
 
+        if first_chunk:
+            # File kosong atau hanya header — buat tabel kosong agar engine tidak crash
+            headers = self.get_headers(sheet_name, skip_rows)
+            cols_def = ", ".join(f'"{h}" VARCHAR' for h in headers) if headers else '"_dummy" VARCHAR'
+            conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+            conn.execute(f"CREATE TABLE {table_name} ({cols_def})")
+            logger.warning("File Excel tidak memiliki data: %s", self._path)
+
         logger.info("Impor Excel selesai: %d baris ke %s", total_rows, table_name)
         return total_rows
 
@@ -169,7 +180,10 @@ class CSVReader:
             raise FileReaderError(f"File tidak ditemukan: {file_path}")
 
     def get_headers(self) -> List[str]:
-        """Ambil nama kolom dari baris pertama."""
+        """Ambil nama kolom dari baris pertama.
+        Nama kolom dikembalikan dalam bentuk ter-sanitasi agar konsisten
+        dengan nama kolom yang tersimpan di tabel DuckDB.
+        """
         try:
             df = pd.read_csv(
                 self._path,
@@ -178,7 +192,7 @@ class CSVReader:
                 nrows=0,
                 dtype=str,
             )
-            return list(df.columns)
+            return [_sanitize_col(c) for c in df.columns]
         except Exception as e:
             raise FileReaderError(f"Gagal membaca header CSV: {e}") from e
 
@@ -263,6 +277,14 @@ class CSVReader:
 
             if progress_callback:
                 progress_callback(total_rows)
+
+        if first_chunk:
+            # File kosong atau hanya header — buat tabel kosong agar engine tidak crash
+            headers = self.get_headers()
+            cols_def = ", ".join(f'"{h}" VARCHAR' for h in headers) if headers else '"_dummy" VARCHAR'
+            conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+            conn.execute(f"CREATE TABLE {table_name} ({cols_def})")
+            logger.warning("File CSV tidak memiliki data: %s", self._path)
 
         logger.info("Impor CSV selesai: %d baris ke %s", total_rows, table_name)
         return total_rows

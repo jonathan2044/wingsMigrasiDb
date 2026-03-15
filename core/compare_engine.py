@@ -75,9 +75,10 @@ class CompareEngine:
 
         self._emit("Mendeteksi key duplikat...", 0, 0)
         try:
+            self._build_dup_keys_table()
             self._find_duplicate_keys()
         except Exception as e:
-            logger.error("[run] GAGAL _find_duplicate_keys: %s", e)
+            logger.error("[run] GAGAL detect duplicates: %s", e)
             raise
 
         self._emit("Membandingkan data...", 0, 0)
@@ -154,60 +155,93 @@ class CompareEngine:
 
     # ------------------------------------------------------------------ private: compare
 
-    def _find_duplicate_keys(self):
-        """Temukan dan catat baris dengan key duplikat."""
+    def _build_dup_keys_table(self):
+        """
+        Buat TEMP TABLE _dup_keys berisi semua key yang AMBIGUS:
+        key yang muncul >1 kali di sisi kiri ATAU >1 kali di sisi kanan.
+        Tabel ini digunakan bersama oleh _find_duplicate_keys() dan _compare_data()
+        sehingga tidak perlu dihitung dua kali dan hasilnya konsisten.
+        """
         if self._config.use_row_order:
-            return  # Mode urutan baris: tidak ada key, tidak ada duplikat
+            return
         keys = [m.left_col for m in self._config.key_columns]
         if not keys:
-            return  # Tidak ada key column, skip duplicate check
+            return
         key_exprs = ", ".join(f'"key_{k}"' for k in keys)
-        key_json = self._build_key_json("nl", keys)
-
-        # Duplikat di sisi kiri
+        self._conn.execute("DROP TABLE IF EXISTS _dup_keys")
         sql = f"""
+        CREATE TEMP TABLE _dup_keys AS
+        SELECT {key_exprs} FROM normalized_left  GROUP BY {key_exprs} HAVING COUNT(*) > 1
+        UNION
+        SELECT {key_exprs} FROM normalized_right GROUP BY {key_exprs} HAVING COUNT(*) > 1
+        """
+        self._conn.execute(sql)
+        n_dup = self._conn.execute("SELECT COUNT(*) FROM _dup_keys").fetchone()[0]
+        logger.info("[dup_keys] Jumlah kombinasi key ambigus: %d", n_dup)
+
+    def _find_duplicate_keys(self):
+        """
+        Catat SEMUA baris (dari kiri dan kanan) yang memiliki key ambigus.
+        Key ambigus = muncul >1 kali di salah satu atau kedua sisi.
+
+        Semua baris ini dikecualikan dari perbandingan (match/mismatch/missing)
+        agar tidak ada ambiguitas. Dengan melaporkan KEDUA SISI, tidak ada baris
+        yang hilang diam-diam — setiap baris input masuk ke tepat satu kategori.
+        """
+        if self._config.use_row_order:
+            return
+        keys = [m.left_col for m in self._config.key_columns]
+        if not keys:
+            return
+
+        compare_cols    = self._config.compare_columns
+        key_json_nl     = self._build_key_json("nl", keys)
+        key_json_nr     = self._build_key_json("nr", keys)
+        left_data_json  = self._build_row_json("nl", [f"left_{cm.left_col}"  for cm in compare_cols])
+        right_data_json = self._build_row_json("nr", [f"right_{cm.right_col}" for cm in compare_cols])
+        dup_join_nl     = " AND ".join(f'nl."key_{k}" = _dk."key_{k}"' for k in keys)
+        dup_join_nr     = " AND ".join(f'nr."key_{k}" = _dk."key_{k}"' for k in keys)
+
+        # Semua baris KIRI yang keynya ambigus
+        sql_left = f"""
         INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
         SELECT
-            left_rownum,
+            nl.left_rownum,
             '{RESULT_DUPLICATE_KEY}',
-            {key_json},
-            '{{}}',
+            {key_json_nl},
+            {left_data_json},
             '{{}}',
             '[]'
         FROM normalized_left nl
-        WHERE ({key_exprs}) IN (
-            SELECT {key_exprs}
-            FROM normalized_left
-            GROUP BY {key_exprs}
-            HAVING COUNT(*) > 1
-        )
+        INNER JOIN _dup_keys _dk ON {dup_join_nl}
         """
-        self._conn.execute(sql)
+        try:
+            self._conn.execute(sql_left)
+        except Exception as e:
+            logger.error("[dup_keys] GAGAL insert kiri: %s", e)
+            raise
 
-        # Duplikat di sisi kanan — HANYA untuk key yang TIDAK duplikat di sisi kiri.
-        # Jika key yang sama duplikat di kedua sisi, sudah dilaporkan dari kiri;
-        # memasukkan dari kanan juga akan menyebabkan double-count pada total_rows.
-        key_json_r = self._build_key_json("nr", keys)
-        join_cond_r = " AND ".join(f'nr."key_{k}" = rod."key_{k}"' for k in keys)
-        sql_r = f"""
+        # Semua baris KANAN yang keynya ambigus
+        sql_right = f"""
         INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
         SELECT
             nr.right_rownum,
             '{RESULT_DUPLICATE_KEY}',
-            {key_json_r},
+            {key_json_nr},
             '{{}}',
-            '{{}}',
+            {right_data_json},
             '[]'
         FROM normalized_right nr
-        INNER JOIN (
-            SELECT {key_exprs} FROM normalized_right
-            GROUP BY {key_exprs} HAVING COUNT(*) > 1
-            EXCEPT
-            SELECT {key_exprs} FROM normalized_left
-            GROUP BY {key_exprs} HAVING COUNT(*) > 1
-        ) rod ON {join_cond_r}
+        INNER JOIN _dup_keys _dk ON {dup_join_nr}
         """
-        self._conn.execute(sql_r)
+        try:
+            self._conn.execute(sql_right)
+        except Exception as e:
+            logger.error("[dup_keys] GAGAL insert kanan: %s", e)
+            raise
+
+        dup_left  = self._conn.execute(f"SELECT COUNT(*) FROM compare_results WHERE status='{RESULT_DUPLICATE_KEY}'").fetchone()[0]
+        logger.info("[dup_keys] Total baris duplicate_key dilaporkan: %d", dup_left)
 
     def _compare_data(self):
         """
@@ -243,20 +277,7 @@ class CompareEngine:
         logger.info("[compare_data] Sample key kiri (5 pertama): %s", sample_l)
         logger.info("[compare_data] Sample key kanan (5 pertama): %s", sample_r)
 
-        # ---------- Pre-compute duplicate keys sekali, simpan di temp table ----------
-        # PENTING: jangan query compare_results untuk kolom key — tabel itu tidak punya
-        # kolom key individual, hanya key_values (JSON). Duplikat dideteksi langsung
-        # dari normalized views.
-        self._conn.execute("DROP TABLE IF EXISTS _dup_keys")
-        sql_dup_tbl = f"""
-        CREATE TEMP TABLE _dup_keys AS
-        SELECT {key_exprs} FROM normalized_left  GROUP BY {key_exprs} HAVING COUNT(*) > 1
-        UNION
-        SELECT {key_exprs} FROM normalized_right GROUP BY {key_exprs} HAVING COUNT(*) > 1
-        """
-        logger.debug("[compare_data] membuat _dup_keys:\n%s", sql_dup_tbl)
-        self._conn.execute(sql_dup_tbl)
-
+        # _dup_keys sudah dibuat di _build_dup_keys_table() sebelum method ini dipanggil
         dup_join_nl = " AND ".join(f'nl."key_{k}" = _dk."key_{k}"' for k in keys)
         dup_join_nr = " AND ".join(f'nr."key_{k}" = _dk."key_{k}"' for k in keys)
 
@@ -490,7 +511,7 @@ class CompareEngine:
         for cm in compare_cols:
             lc = f'"left_{cm.left_col}"'
             rc = f'"right_{cm.right_col}"'
-            clean_name = cm.left_col.replace("'", "\\'")
+            clean_name = cm.left_col.replace("'", "''")
             case_parts.append(
                 f"CASE WHEN {lc} IS DISTINCT FROM {rc} THEN '{clean_name}' ELSE NULL END"
             )
