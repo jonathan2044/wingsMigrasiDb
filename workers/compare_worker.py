@@ -153,11 +153,13 @@ class CompareWorker(QThread):
                 self._log(
                     f"Perbandingan selesai! Total {summary['total_rows']:,} baris diproses."
                 )
+                _dup_cnt = summary.get('duplicate_key', 0)
                 self._log(
                     f"  Cocok: {summary.get('match', 0):,} | "
                     f"Tidak cocok: {summary.get('mismatch', 0):,} | "
                     f"Hanya di kiri: {summary.get('missing_right', 0):,} | "
                     f"Hanya di kanan: {summary.get('missing_left', 0):,}"
+                    + (f" | Key Duplikat: {_dup_cnt:,} (baris ini dikecualikan dari perbandingan)" if _dup_cnt > 0 else "")
                 )
 
                 self.job_completed.emit(job_id, summary)

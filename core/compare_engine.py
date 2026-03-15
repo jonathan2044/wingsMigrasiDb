@@ -164,6 +164,7 @@ class CompareEngine:
         key_exprs = ", ".join(f'"key_{k}"' for k in keys)
         key_json = self._build_key_json("nl", keys)
 
+        # Duplikat di sisi kiri
         sql = f"""
         INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
         SELECT
@@ -183,25 +184,28 @@ class CompareEngine:
         """
         self._conn.execute(sql)
 
-        # Duplikat di kanan juga
-        right_key_exprs = ", ".join(f'"key_{k}"' for k in keys)
+        # Duplikat di sisi kanan — HANYA untuk key yang TIDAK duplikat di sisi kiri.
+        # Jika key yang sama duplikat di kedua sisi, sudah dilaporkan dari kiri;
+        # memasukkan dari kanan juga akan menyebabkan double-count pada total_rows.
         key_json_r = self._build_key_json("nr", keys)
+        join_cond_r = " AND ".join(f'nr."key_{k}" = rod."key_{k}"' for k in keys)
         sql_r = f"""
         INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
         SELECT
-            right_rownum,
+            nr.right_rownum,
             '{RESULT_DUPLICATE_KEY}',
             {key_json_r},
             '{{}}',
             '{{}}',
             '[]'
         FROM normalized_right nr
-        WHERE ({right_key_exprs}) IN (
-            SELECT {right_key_exprs}
-            FROM normalized_right
-            GROUP BY {right_key_exprs}
-            HAVING COUNT(*) > 1
-        )
+        INNER JOIN (
+            SELECT {key_exprs} FROM normalized_right
+            GROUP BY {key_exprs} HAVING COUNT(*) > 1
+            EXCEPT
+            SELECT {key_exprs} FROM normalized_left
+            GROUP BY {key_exprs} HAVING COUNT(*) > 1
+        ) rod ON {join_cond_r}
         """
         self._conn.execute(sql_r)
 
