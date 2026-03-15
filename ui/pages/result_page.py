@@ -91,7 +91,7 @@ class _LeftNav(QWidget):
     switched    = Signal(int)   # 0=summary, 1=detail
     go_back     = Signal()
 
-    _ITEMS = [(0, "\U0001f4ca", "Result Summary"), (1, "\U0001f4cb", "Result Detail")]
+    _ITEMS = [(0, "\U0001f4ca", "Hasil Konversi"), (1, "\U0001f4cb", "Cek Detail")]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -336,7 +336,7 @@ class _SummaryView(QWidget):
 
         # ── header ──
         hdr = QHBoxLayout()
-        self._bc = QLabel("JOB-000  \u203a  Result Summary")
+        self._bc = QLabel("JOB-000  \u203a  Hasil Konversi")
         self._bc.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
         hdr.addWidget(self._bc)
         hdr.addStretch()
@@ -408,7 +408,7 @@ class _SummaryView(QWidget):
         bd_vl.setContentsMargins(20, 16, 20, 18)
         bd_vl.setSpacing(10)
         bd_hdr = QHBoxLayout()
-        bd_title = QLabel("\u2297  Mismatch Breakdown by Column")
+        bd_title = QLabel("\u2297  Mismatch Breakdown by Kolom")
         bd_title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {COLOR_TEXT};")
         bd_hdr.addWidget(bd_title)
         bd_hdr.addStretch()
@@ -430,14 +430,14 @@ class _SummaryView(QWidget):
         jd_vl = QVBoxLayout(jd_card)
         jd_vl.setContentsMargins(20, 16, 20, 18)
         jd_vl.setSpacing(0)
-        jd_title = QLabel("Job Details")
+        jd_title = QLabel("Detail Informasi")
         jd_title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {COLOR_TEXT};")
         jd_vl.addWidget(jd_title)
         jd_vl.addSpacing(10)
         self._detail_vals: List[QLabel] = []
-        for key in ["Mode", "Left", "Right", "Key Column(s)", "Compare Columns",
-                    "Total Left Rows", "Total Right Rows",
-                    "Normalization", "Duration", "Completed"]:
+        for key in ["Mode", "Kiri", "Kanan", "Key", "Kolom dicompare",
+                    "Total Row Kiri", "Total Row Kanan",
+                    "Normalization", "Durasi", "Completed"]:
             hl = QHBoxLayout()
             k_lbl = QLabel(key)
             k_lbl.setFixedWidth(130)
@@ -480,8 +480,8 @@ class _SummaryView(QWidget):
 
     def load(self, job: "CompareJob", summary: dict, breakdown: list):
         total = summary.get("total_rows", 0)
-        self._bc.setText(f"{job.job_number}  \u203a  Result Summary")
-        self._title.setText(f"{job.name}  \u2014  Results")
+        self._bc.setText(f"{job.job_number}  \u203a  Hasil Konversi")
+        self._title.setText(f"{job.name}  \u2014  Hasil Konversi")
         self._meta.setText(
             f"{_fmt(total)} rows  \u00b7  Completed in {job.duration_str}  "
             f"\u00b7  {job.time_ago_str}"
@@ -621,7 +621,7 @@ class _DetailView(QWidget):
 
         # header
         hdr = QHBoxLayout()
-        self._bc = QLabel("JOB-000  \u203a  Result Detail")
+        self._bc = QLabel("JOB-000  \u203a  Cek Detail")
         self._bc.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
         hdr.addWidget(self._bc)
         hdr.addStretch()
@@ -633,7 +633,7 @@ class _DetailView(QWidget):
         hdr.addWidget(self._export_btn)
         vl.addLayout(hdr)
 
-        self._title = QLabel("Detailed Results")
+        self._title = QLabel("Cek Detail")
         self._title.setStyleSheet(f"color: {COLOR_TEXT}; font-size: 18px; font-weight: 700;")
         vl.addWidget(self._title)
 
@@ -721,8 +721,8 @@ class _DetailView(QWidget):
     def setup_columns(self, job: "CompareJob", key_maps: list, cmp_maps: list):
         self._key_mappings    = key_maps
         self._compare_mappings = cmp_maps
-        self._bc.setText(f"{job.job_number}  \u203a  Result Detail")
-        self._title.setText(f"{job.name}  \u2014  Detailed Results")
+        self._bc.setText(f"{job.job_number}  \u203a  Cek Detail")
+        self._title.setText(f"{job.name}  \u2014  Cek Detail")
         self._rebuild_headers()
 
     def _rebuild_headers(self):
