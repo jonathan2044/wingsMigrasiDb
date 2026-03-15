@@ -25,6 +25,18 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QTableView,
 )
 
+
+class _NoScrollComboBox(QComboBox):
+    """QComboBox yang mengabaikan wheel event saat tidak dalam fokus.
+    Mencegah nilai berubah ketika user scroll halaman tanpa klik terlebih dulu.
+    """
+    def wheelEvent(self, event):
+        # Hanya proses wheel jika combo sedang aktif (popup terbuka / hasFocus)
+        if self.view().isVisible():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
 from config.constants import (
     JOB_TYPE_FILE_VS_FILE, JOB_TYPE_FILE_VS_PG,
     JOB_STATUS_QUEUED,
@@ -321,7 +333,7 @@ class _Step1SelectSource(QWidget):
         tmpl_sub = QLabel("Skip konfigurasi — tinggal pilih template yang pernah disimpan sebelumnya.")
         tmpl_sub.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
         tl.addWidget(tmpl_sub)
-        self._template_combo = QComboBox()
+        self._template_combo = _NoScrollComboBox()
         self._template_combo.setMinimumHeight(38)
         self._refresh_templates()
         tl.addWidget(self._template_combo)
@@ -528,7 +540,7 @@ class _FileSourceCard(QFrame):
 
         # Bottom row: file type + browse
         bottom_row = QHBoxLayout()
-        self._file_type_combo = QComboBox()
+        self._file_type_combo = _NoScrollComboBox()
         self._file_type_combo.addItems(["CSV (.csv)", "Excel (.xlsx/.xls)"])
         self._file_type_combo.setFixedWidth(160)
         self._file_type_combo.setFixedHeight(34)
@@ -550,12 +562,12 @@ class _FileSourceCard(QFrame):
         csv_hl.setContentsMargins(0, 0, 0, 0)
         csv_hl.setSpacing(8)
         csv_hl.addWidget(QLabel("Separator:"))
-        self._csv_sep = QComboBox()
+        self._csv_sep = _NoScrollComboBox()
         self._csv_sep.addItems([", (comma)", "; (semicolon)", "\\t (tab)", "| (pipe)"])
         self._csv_sep.setFixedWidth(150)
         csv_hl.addWidget(self._csv_sep)
         csv_hl.addWidget(QLabel("Encoding:"))
-        self._csv_enc = QComboBox()
+        self._csv_enc = _NoScrollComboBox()
         self._csv_enc.addItems(["utf-8", "utf-8-sig", "latin-1", "cp1252"])
         self._csv_enc.setFixedWidth(110)
         csv_hl.addWidget(self._csv_enc)
@@ -772,7 +784,7 @@ class _PgConnectionCard(QFrame):
         hdr_row.addWidget(ic)
         hdr_row.addWidget(head_lbl)
         hdr_row.addStretch()
-        self._saved_conn_combo = QComboBox()
+        self._saved_conn_combo = _NoScrollComboBox()
         self._saved_conn_combo.setFixedWidth(220)
         self._saved_conn_combo.setFixedHeight(34)
         self._load_saved_connections()
@@ -823,7 +835,7 @@ class _PgConnectionCard(QFrame):
 
         row4 = QHBoxLayout(); row4.setSpacing(12)
         ssl_vl = QVBoxLayout(); ssl_vl.addWidget(QLabel("SSL Mode"))
-        self._ssl_mode = QComboBox(); self._ssl_mode.setMinimumHeight(36)
+        self._ssl_mode = _NoScrollComboBox(); self._ssl_mode.setMinimumHeight(36)
         self._ssl_mode.addItems(["disable", "prefer", "require", "verify-ca", "verify-full"])
         ssl_vl.addWidget(self._ssl_mode)
         row4.addLayout(ssl_vl, 1); row4.addStretch(2)
@@ -900,7 +912,7 @@ class _PgConnectionCard(QFrame):
         ssh_auth_vl = QVBoxLayout()
         _ssh_auth_lbl = QLabel("Auth Method"); _ssh_auth_lbl.setStyleSheet("background: transparent;")
         ssh_auth_vl.addWidget(_ssh_auth_lbl)
-        self._ssh_auth = QComboBox()
+        self._ssh_auth = _NoScrollComboBox()
         self._ssh_auth.addItems(["Password", "Key"])
         self._ssh_auth.setMinimumHeight(34)
         self._ssh_auth.currentTextChanged.connect(self._toggle_ssh_auth)
@@ -982,11 +994,11 @@ class _PgConnectionCard(QFrame):
         self._table_mode_widget = QWidget()
         tm_hl = QHBoxLayout(self._table_mode_widget); tm_hl.setContentsMargins(0,0,0,0); tm_hl.setSpacing(12)
         s_vl = QVBoxLayout(); s_vl.addWidget(QLabel("Schema"))
-        self._pg_schema_combo = QComboBox(); self._pg_schema_combo.setMinimumHeight(36)
+        self._pg_schema_combo = _NoScrollComboBox(); self._pg_schema_combo.setMinimumHeight(36)
         self._pg_schema_combo.currentTextChanged.connect(self._on_schema_changed)
         s_vl.addWidget(self._pg_schema_combo); tm_hl.addLayout(s_vl, 1)
         t_vl = QVBoxLayout(); t_vl.addWidget(QLabel("Table"))
-        self._pg_table_combo = QComboBox(); self._pg_table_combo.setMinimumHeight(36)
+        self._pg_table_combo = _NoScrollComboBox(); self._pg_table_combo.setMinimumHeight(36)
         self._pg_table_combo.currentTextChanged.connect(self._on_table_changed)
         t_vl.addWidget(self._pg_table_combo); tm_hl.addLayout(t_vl, 2)
         vl.addWidget(self._table_mode_widget)
@@ -1507,7 +1519,7 @@ class _Step3ColumnMapping(QWidget):
         self._table.setCellWidget(row, 0, del_wrap)
 
         # Kolom 1 — dropdown kolom kiri
-        left_combo = QComboBox()
+        left_combo = _NoScrollComboBox()
         left_combo.addItems(self._left_headers or [left])
         left_combo.setCurrentText(left)
         left_combo.setStyleSheet(
@@ -1523,7 +1535,7 @@ class _Step3ColumnMapping(QWidget):
         self._table.setCellWidget(row, 2, arrow)
 
         # Kolom 3 — dropdown kolom kanan
-        right_combo = QComboBox()
+        right_combo = _NoScrollComboBox()
         right_combo.addItems(self._right_headers or [right])
         right_combo.setCurrentText(right)
         right_combo.setStyleSheet(
