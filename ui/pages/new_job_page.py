@@ -173,7 +173,7 @@ class _SideStepIndicator(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        header = QLabel("NEW JOB STEPS")
+        header = QLabel("STEP2 COMPARASI")
         header.setStyleSheet(
             f"color: {COLOR_TEXT_MUTED}; font-size: 10px; font-weight: 700; "
             "letter-spacing: 1px; padding: 20px 20px 12px 20px;"
