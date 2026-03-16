@@ -391,7 +391,7 @@ class _TransformRuleDialog(QDialog):
 # ─── Group Expansion Rule Dialog ──────────────────────────────────────────────
 
 class _GroupExpansionRuleDialog(QDialog):
-    """Dialog tambah/edit GroupExpansionRule — termasuk upload CSV mapping."""
+    """Dialog tambah/edit GroupExpansionRule — upload CSV/Excel mapping, kolom kanan eksplisit."""
 
     def __init__(self, rule: GroupExpansionRule = None, parent=None):
         super().__init__(parent)
@@ -402,23 +402,23 @@ class _GroupExpansionRuleDialog(QDialog):
             self._mapping = {k: [list(row) for row in rows] for k, rows in rule.mapping.items()}
             self._right_cols = list(rule.right_cols)
         self.setWindowTitle("Aturan Group Expansion")
-        self.setMinimumWidth(640)
+        self.setMinimumWidth(700)
         self._setup_ui()
         if rule:
             self._populate(rule)
 
     def _setup_ui(self):
         from PySide6.QtWidgets import QAbstractItemView
-        from ui.styles import COLOR_TEXT, COLOR_TEXT_MUTED, COLOR_BORDER
+        from ui.styles import COLOR_TEXT, COLOR_TEXT_MUTED, COLOR_BORDER, COLOR_PRIMARY
         vl = QVBoxLayout(self)
         vl.setSpacing(12)
 
+        # ── Step 1: Nama kolom kiri + status ──────────────────────────────────
         form = QFormLayout()
         form.setSpacing(8)
         self._left_col = QLineEdit()
         self._left_col.setPlaceholderText("Contoh: cust_group")
         form.addRow("Nama Kolom Kiri:", self._left_col)
-
         self._enabled_chk = QCheckBox("Aktif")
         self._enabled_chk.setChecked(True)
         form.addRow("Status:", self._enabled_chk)
@@ -429,43 +429,72 @@ class _GroupExpansionRuleDialog(QDialog):
         sep.setStyleSheet(f"color: {COLOR_BORDER};")
         vl.addWidget(sep)
 
-        map_title = QLabel("Mapping CSV (Row & Column Expansion)")
+        map_title = QLabel("Mapping: Row & Column Expansion")
         map_title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {COLOR_TEXT};")
         vl.addWidget(map_title)
 
+        # Hint box
         map_hint = QLabel(
-            "Format CSV: baris pertama adalah header yang menentukan nama kolom kanan, "
-            "baris berikutnya adalah data mapping (satu baris = satu baris kanan yang di-expand).\n"
-            "Contoh:\n"
-            "  left_value,cust_group,cust_group1,cust_group2\n"
-            "  AA,2A0,A20,A2\n"
-            "  AA,2A0,A21,A3\n"
-            "  BB,3B0,,"
+            "Kolom kanan selalu sama untuk semua value kiri — yang berbeda hanya jumlah baris per value.\n"
+            "Format file (CSV/Excel): kolom pertama = value kolom kiri, kolom berikutnya = kombinasi nilai kolom kanan.\n"
+            "Baris pertama boleh berupa header (nama kolom). Contoh:\n"
+            "  left_value  │  cust_group  │  cust_group1  │  cust_group2\n"
+            "  AA          │  2A0         │  A20          │  A0       ← baris 1 untuk AA\n"
+            "  AA          │  2A0         │  A21          │  A1       ← baris 2 untuk AA\n"
+            "  AB          │  3B0         │  B20          │  B0       ← baris 1 untuk AB"
         )
         map_hint.setWordWrap(True)
-        map_hint.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
+        map_hint.setStyleSheet(
+            f"color: {COLOR_TEXT_MUTED}; font-size: 11px; font-family: monospace; "
+            "background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:8px;"
+        )
         vl.addWidget(map_hint)
 
+        # ── Step 2: Kolom kanan (eksplisit) ───────────────────────────────────
+        rc_form = QFormLayout()
+        rc_form.setSpacing(6)
+        rc_hl = QHBoxLayout()
+        self._right_cols_edit = QLineEdit()
+        self._right_cols_edit.setPlaceholderText("Contoh: cust_group, cust_group1, cust_group2")
+        self._right_cols_edit.textChanged.connect(self._on_right_cols_changed)
+        rc_hl.addWidget(self._right_cols_edit)
+        rc_hint_lbl = QLabel("(pisah koma)")
+        rc_hint_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
+        rc_hl.addWidget(rc_hint_lbl)
+        rc_form.addRow("Kolom Kanan:", rc_hl)
+        vl.addLayout(rc_form)
+
+        col_tip = QLabel(
+            "\u2139\ufe0f  Isi Kolom Kanan terlebih dahulu, lalu upload file mapping. "
+            "Jika file memiliki baris header, nama kolom akan terisi otomatis."
+        )
+        col_tip.setWordWrap(True)
+        col_tip.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
+        vl.addWidget(col_tip)
+
+        # ── Step 3: Upload buttons ─────────────────────────────────────────────
         upload_hl = QHBoxLayout()
-        self._upload_btn = QPushButton("\U0001f4c2 Upload CSV")
-        self._upload_btn.setObjectName("secondaryBtn")
-        self._upload_btn.setFixedHeight(34)
-        self._upload_btn.clicked.connect(self._upload_csv)
-        upload_hl.addWidget(self._upload_btn)
+        self._upload_csv_btn = QPushButton("\U0001f4c2  Upload CSV")
+        self._upload_csv_btn.setObjectName("secondaryBtn")
+        self._upload_csv_btn.setFixedHeight(34)
+        self._upload_csv_btn.clicked.connect(self._upload_csv)
+        self._upload_xls_btn = QPushButton("\U0001f4ca  Upload Excel")
+        self._upload_xls_btn.setObjectName("secondaryBtn")
+        self._upload_xls_btn.setFixedHeight(34)
+        self._upload_xls_btn.clicked.connect(self._upload_excel)
         self._file_lbl = QLabel("Belum ada file")
         self._file_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
+        upload_hl.addWidget(self._upload_csv_btn)
+        upload_hl.addWidget(self._upload_xls_btn)
         upload_hl.addWidget(self._file_lbl, 1)
         vl.addLayout(upload_hl)
 
-        self._cols_lbl = QLabel("Kolom kanan: (belum di-upload)")
-        self._cols_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
-        vl.addWidget(self._cols_lbl)
-
+        # ── Preview table ──────────────────────────────────────────────────────
         self._preview_tbl = QTableWidget(0, 2)
-        self._preview_tbl.setHorizontalHeaderLabels(["Value Kiri", "Value Kanan (per baris & kolom)"])
+        self._preview_tbl.setHorizontalHeaderLabels(["Value Kiri", "Kombinasi Kanan (preview per baris)"])
         self._preview_tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._preview_tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self._preview_tbl.setMaximumHeight(190)
+        self._preview_tbl.setMaximumHeight(200)
         self._preview_tbl.verticalHeader().setVisible(False)
         self._preview_tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._preview_tbl.setStyleSheet(
@@ -488,11 +517,20 @@ class _GroupExpansionRuleDialog(QDialog):
 
         self._refresh_preview()
 
+    def _on_right_cols_changed(self, text: str):
+        """Update _right_cols saat user mengetik nama kolom kanan secara manual."""
+        self._right_cols = [c.strip() for c in text.split(",") if c.strip()]
+        self._refresh_preview()
+
     def _populate(self, rule: GroupExpansionRule):
         self._left_col.setText(rule.left_col)
         self._enabled_chk.setChecked(rule.enabled)
         self._mapping = {k: [list(row) for row in rows] for k, rows in rule.mapping.items()}
         self._right_cols = list(rule.right_cols)
+        if self._right_cols:
+            self._right_cols_edit.blockSignals(True)
+            self._right_cols_edit.setText(", ".join(self._right_cols))
+            self._right_cols_edit.blockSignals(False)
         n_left  = len(self._mapping)
         n_right = sum(len(rows) for rows in self._mapping.values())
         self._file_lbl.setText(f"Mapping: {n_left} value kiri, {n_right} baris kanan")
@@ -507,14 +545,41 @@ class _GroupExpansionRuleDialog(QDialog):
         if not path:
             return
         try:
-            self._right_cols, self._mapping = self._parse_csv(path)
-            self._file_lbl.setText(os.path.basename(path))
-            self._refresh_preview()
+            right_cols, mapping = self._parse_csv(path, fallback_cols=self._right_cols)
+            self._apply_parsed(right_cols, mapping, os.path.basename(path))
         except Exception as e:
             msg_warning(self, "Gagal Baca CSV", f"Error membaca file: {e}")
 
+    def _upload_excel(self):
+        from PySide6.QtWidgets import QFileDialog
+        import os
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Upload Mapping Excel", "",
+            "Excel Files (*.xlsx *.xls);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            right_cols, mapping = self._parse_excel(path, fallback_cols=self._right_cols)
+            self._apply_parsed(right_cols, mapping, os.path.basename(path))
+        except Exception as e:
+            msg_warning(self, "Gagal Baca Excel", f"Error membaca file: {e}")
+
+    def _apply_parsed(self, right_cols: list, mapping: dict, filename: str):
+        """Terapkan hasil parsing file, sinkronkan field kolom kanan, refresh preview."""
+        self._mapping = mapping
+        if right_cols:
+            # File punya header → pakai nama dari header, update field
+            self._right_cols = right_cols
+            self._right_cols_edit.blockSignals(True)
+            self._right_cols_edit.setText(", ".join(right_cols))
+            self._right_cols_edit.blockSignals(False)
+        # Jika file tidak punya header, pakai self._right_cols yang sudah ada (dari field)
+        self._file_lbl.setText(filename)
+        self._refresh_preview()
+
     @staticmethod
-    def _parse_csv(filepath: str):
+    def _parse_csv(filepath: str, fallback_cols: list = None):
         """Baca CSV mapping. Returns (right_cols, mapping) tuple."""
         import csv
         right_cols: list = []
@@ -527,7 +592,6 @@ class _GroupExpansionRuleDialog(QDialog):
         if not rows:
             return [], {}
 
-        # Deteksi header row
         first = [c.strip() for c in rows[0]]
         is_header = (
             len(first) >= 2
@@ -537,10 +601,11 @@ class _GroupExpansionRuleDialog(QDialog):
             right_cols = first[1:]
             data_rows = rows[1:]
         else:
-            right_cols = []
+            right_cols = []    # akan diisi dari fallback_cols
             data_rows = rows
 
-        n_cols = len(right_cols)
+        eff_cols = right_cols or fallback_cols or []
+        n_cols = len(eff_cols) if eff_cols else None
         for raw_row in data_rows:
             if not raw_row:
                 continue
@@ -549,29 +614,73 @@ class _GroupExpansionRuleDialog(QDialog):
             if not lv:
                 continue
             vals = cells[1:]
-            if n_cols:
-                padded = vals[:n_cols] + [''] * max(0, n_cols - len(vals))
-            else:
-                padded = vals
+            padded = vals[:n_cols] + [''] * max(0, (n_cols or 0) - len(vals)) if n_cols else vals
             if not any(v for v in padded):
                 continue
             if lv not in mapping:
                 mapping[lv] = []
             mapping[lv].append(padded)
 
-        # Auto-generate right_col names if no header found
-        if not right_cols and mapping:
-            max_c = max((len(row) for rows_list in mapping.values() for row in rows_list), default=0)
+        # Auto-generate names jika tidak ada header dan tidak ada fallback
+        if not right_cols and not fallback_cols and mapping:
+            max_c = max((len(r) for rl in mapping.values() for r in rl), default=0)
+            right_cols = [f"col_{i}" for i in range(max_c)]
+
+        # Kembalikan right_cols dari header saja (bukan fallback) agar _apply_parsed tahu
+        return right_cols, mapping
+
+    @staticmethod
+    def _parse_excel(filepath: str, fallback_cols: list = None):
+        """Baca Excel mapping. Returns (right_cols, mapping) tuple."""
+        import openpyxl
+        right_cols: list = []
+        mapping: dict = {}
+
+        wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+        ws = wb.active
+        all_rows = []
+        for row in ws.iter_rows(values_only=True):
+            cells = [str(c).strip() if c is not None else "" for c in row]
+            if any(cells):
+                all_rows.append(cells)
+        wb.close()
+
+        if not all_rows:
+            return [], {}
+
+        first = all_rows[0]
+        is_header = (
+            len(first) >= 2
+            and first[0].lower() in ("left_value", "left_val", "kiri", "nilai_kiri")
+        )
+        if is_header:
+            right_cols = first[1:]
+            data_rows = all_rows[1:]
+        else:
+            right_cols = []
+            data_rows = all_rows
+
+        eff_cols = right_cols or fallback_cols or []
+        n_cols = len(eff_cols) if eff_cols else None
+        for cells in data_rows:
+            lv = cells[0] if cells else ""
+            if not lv:
+                continue
+            vals = list(cells[1:])
+            padded = vals[:n_cols] + [''] * max(0, (n_cols or 0) - len(vals)) if n_cols else vals
+            if not any(v for v in padded):
+                continue
+            if lv not in mapping:
+                mapping[lv] = []
+            mapping[lv].append(padded)
+
+        if not right_cols and not fallback_cols and mapping:
+            max_c = max((len(r) for rl in mapping.values() for r in rl), default=0)
             right_cols = [f"col_{i}" for i in range(max_c)]
 
         return right_cols, mapping
 
     def _refresh_preview(self):
-        if self._right_cols:
-            self._cols_lbl.setText("Kolom kanan: " + ", ".join(self._right_cols))
-        else:
-            self._cols_lbl.setText("Kolom kanan: (belum di-upload)")
-
         self._preview_tbl.setRowCount(0)
         count = 0
         for lv, rows_list in list(self._mapping.items())[:10]:
@@ -600,7 +709,9 @@ class _GroupExpansionRuleDialog(QDialog):
                 f"Total: {n_left} value kiri, {n_right} baris kanan, {n_cols} kolom kanan"
             )
         else:
-            self._map_summary_lbl.setText("Belum ada mapping. Upload CSV terlebih dahulu.")
+            self._map_summary_lbl.setText(
+                "Belum ada mapping. Isi Kolom Kanan lalu upload file CSV atau Excel."
+            )
 
     def _on_save(self):
         lc = self._left_col.text().strip()
@@ -608,11 +719,13 @@ class _GroupExpansionRuleDialog(QDialog):
             msg_warning(self, "Isian Tidak Lengkap", "Nama Kolom Kiri tidak boleh kosong.")
             return
         if not self._mapping:
-            msg_warning(self, "Mapping Kosong", "Upload CSV mapping terlebih dahulu.")
+            msg_warning(self, "Mapping Kosong", "Upload file CSV atau Excel mapping terlebih dahulu.")
             return
         if not self._right_cols:
-            msg_warning(self, "Kolom Kanan Tidak Diketahui",
-                        "Pastikan CSV memiliki baris header yang mendefinisikan nama kolom kanan.")
+            msg_warning(
+                self, "Kolom Kanan Belum Diisi",
+                "Isi nama kolom kanan (pisah koma) atau pastikan file memiliki baris header."
+            )
             return
         self._result_rule = GroupExpansionRule(
             left_col=lc,

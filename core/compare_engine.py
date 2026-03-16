@@ -561,9 +561,11 @@ class CompareEngine:
         Setiap left row dengan group val ADA di mapping di-expand ke beberapa right rows,
         di mana setiap right row memiliki beberapa kolom (right_cols).
 
-        - Left val ADA di mapping  → INNER JOIN tiap expected right row → MATCH/MISMATCH/MISSING_RIGHT
-        - Left val TIDAK di mapping → fallback 1-to-1 + warning (Q5)
-        - Right rows tidak ter-cover oleh expansion maupun fallback → MISSING_LEFT (Q6)
+        Logika any-match:
+        - Left val ADA di mapping + minimal 1 expected right row ditemukan di kanan → MATCH
+        - Left val ADA di mapping + tidak ada expected right row ditemukan → MISSING_RIGHT
+        - Left val TIDAK di mapping → fallback 1-to-1 + warning
+        - Right rows tidak ter-cover oleh expansion maupun fallback → MISSING_LEFT
         """
         if self._config.use_row_order:
             logger.warning("[group_exp] Urutan-baris mode tidak mendukung group expansion. Jalankan normal.")
@@ -657,28 +659,32 @@ class CompareEngine:
             )
         mismatch_cond = " OR ".join(diff_checks) if diff_checks else "FALSE"
 
-        # ── PART 1a: mapped left rows + right row ditemukan → MATCH / MISMATCH ──
+        # ── PART 1a: mapped left rows + minimal 1 kombinasi ditemukan di kanan → MATCH ──
+        # Any-match: cukup EXISTS 1 pasangan (expected_combo × right_row) yang cocok.
         sql_match = f"""
         INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
         SELECT
             nl.left_rownum,
-            CASE WHEN {mismatch_cond} THEN '{RESULT_MISMATCH}' ELSE '{RESULT_MATCH}' END,
+            '{RESULT_MATCH}',
             {key_json_nl},
             {left_data_json},
-            {right_data_json},
-            {diff_cols_expr}
+            '{{}}',
+            '[]'
         FROM normalized_left nl
-        INNER JOIN _ge_expected ge ON nl."{left_gcol}" = ge.left_val
-        INNER JOIN normalized_right nr ON {key_join_nl_nr} AND {ge_right_match}
+        WHERE EXISTS (
+            SELECT 1 FROM _ge_expected ge
+            INNER JOIN normalized_right nr ON {key_join_nl_nr} AND {ge_right_match}
+            WHERE ge.left_val = nl."{left_gcol}"
+        )
         """
-        logger.debug("[group_exp] Match/Mismatch SQL:\n%s", sql_match)
+        logger.debug("[group_exp] Any-Match SQL:\n%s", sql_match)
         try:
             self._conn.execute(sql_match)
         except Exception as e:
-            logger.error("[group_exp] GAGAL Match/Mismatch: %s\nSQL: %s", e, sql_match)
+            logger.error("[group_exp] GAGAL Any-Match: %s\nSQL: %s", e, sql_match)
             raise
 
-        # ── PART 1b: mapped left rows + right row TIDAK ditemukan → MISSING_RIGHT ──
+        # ── PART 1b: mapped left rows + TIDAK ADA kombinasi cocok di kanan → MISSING_RIGHT ──
         sql_mr = f"""
         INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
         SELECT
@@ -689,11 +695,14 @@ class CompareEngine:
             '{{}}',
             '[]'
         FROM normalized_left nl
-        INNER JOIN _ge_expected ge ON nl."{left_gcol}" = ge.left_val
-        LEFT JOIN normalized_right nr ON {key_join_nl_nr} AND {ge_right_match}
-        WHERE nr."key_{keys[0]}" IS NULL
+        WHERE EXISTS (SELECT 1 FROM _ge_expected ge WHERE ge.left_val = nl."{left_gcol}")
+          AND NOT EXISTS (
+            SELECT 1 FROM _ge_expected ge
+            INNER JOIN normalized_right nr ON {key_join_nl_nr} AND {ge_right_match}
+            WHERE ge.left_val = nl."{left_gcol}"
+          )
         """
-        logger.debug("[group_exp] Missing Right (mapped) SQL:\n%s", sql_mr)
+        logger.debug("[group_exp] Missing Right (no match) SQL:\n%s", sql_mr)
         try:
             self._conn.execute(sql_mr)
         except Exception as e:
