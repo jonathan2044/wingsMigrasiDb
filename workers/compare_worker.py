@@ -289,6 +289,7 @@ class CompareWorker(QThread):
         """
         import concurrent.futures
         import threading
+        import uuid
 
         # Progress counters (thread-safe via list)
         left_count = [0]
@@ -325,70 +326,68 @@ class CompareWorker(QThread):
         right_rows_result = [0]
 
         def import_left():
+            # Use uuid path so DuckDB always creates a fresh database (NamedTemporaryFile
+            # creates an empty 0-byte file that DuckDB rejects as "not a valid DuckDB db")
+            tmp_path = os.path.join(tempfile.gettempdir(), f"sfa_{uuid.uuid4().hex}_L.duckdb")
             try:
-                with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as f:
-                    tmp_path = f.name
+                tmp_conn = duckdb.connect(tmp_path)
+                profile = self._resolve_db_profile(left_source)
+                if left_source.source_type == "mysql":
+                    from services.mysql_connector import MySQLConnector
+                    connector = MySQLConnector.from_profile(profile)
+                else:
+                    from services.postgres_connector import PostgresConnector
+                    connector = PostgresConnector.from_profile(profile)
                 try:
-                    tmp_conn = duckdb.connect(tmp_path)
-                    profile = self._resolve_db_profile(left_source)
-                    if left_source.source_type == "mysql":
-                        from services.mysql_connector import MySQLConnector
-                        connector = MySQLConnector.from_profile(profile)
-                    else:
-                        from services.postgres_connector import PostgresConnector
-                        connector = PostgresConnector.from_profile(profile)
-                    try:
-                        left_rows_result[0] = connector.import_to_duckdb(
-                            tmp_conn, "src_left",
-                            schema=left_source.schema_name,
-                            table=left_source.table_name,
-                            custom_query=left_source.custom_query if left_source.use_custom_query else "",
-                            chunk_size=chunk,
-                            progress_callback=_left_progress,
-                        )
-                    finally:
-                        connector.close()
-                    tmp_conn.close()
-                    return tmp_path
-                except Exception:
-                    duckdb.connect(tmp_path).close()
-                    os.unlink(tmp_path)
-                    raise
+                    left_rows_result[0] = connector.import_to_duckdb(
+                        tmp_conn, "src_left",
+                        schema=left_source.schema_name,
+                        table=left_source.table_name,
+                        custom_query=left_source.custom_query if left_source.use_custom_query else "",
+                        chunk_size=chunk,
+                        progress_callback=_left_progress,
+                    )
+                finally:
+                    connector.close()
+                tmp_conn.close()
+                return tmp_path
             except Exception as e:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
                 left_err[0] = e
                 return None
 
         def import_right():
+            tmp_path = os.path.join(tempfile.gettempdir(), f"sfa_{uuid.uuid4().hex}_R.duckdb")
             try:
-                with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as f:
-                    tmp_path = f.name
+                tmp_conn = duckdb.connect(tmp_path)
+                profile = self._resolve_db_profile(right_source)
+                if right_source.source_type == "mysql":
+                    from services.mysql_connector import MySQLConnector
+                    connector = MySQLConnector.from_profile(profile)
+                else:
+                    from services.postgres_connector import PostgresConnector
+                    connector = PostgresConnector.from_profile(profile)
                 try:
-                    tmp_conn = duckdb.connect(tmp_path)
-                    profile = self._resolve_db_profile(right_source)
-                    if right_source.source_type == "mysql":
-                        from services.mysql_connector import MySQLConnector
-                        connector = MySQLConnector.from_profile(profile)
-                    else:
-                        from services.postgres_connector import PostgresConnector
-                        connector = PostgresConnector.from_profile(profile)
-                    try:
-                        right_rows_result[0] = connector.import_to_duckdb(
-                            tmp_conn, "src_right",
-                            schema=right_source.schema_name,
-                            table=right_source.table_name,
-                            custom_query=right_source.custom_query if right_source.use_custom_query else "",
-                            chunk_size=chunk,
-                            progress_callback=_right_progress,
-                        )
-                    finally:
-                        connector.close()
-                    tmp_conn.close()
-                    return tmp_path
-                except Exception:
-                    duckdb.connect(tmp_path).close()
-                    os.unlink(tmp_path)
-                    raise
+                    right_rows_result[0] = connector.import_to_duckdb(
+                        tmp_conn, "src_right",
+                        schema=right_source.schema_name,
+                        table=right_source.table_name,
+                        custom_query=right_source.custom_query if right_source.use_custom_query else "",
+                        chunk_size=chunk,
+                        progress_callback=_right_progress,
+                    )
+                finally:
+                    connector.close()
+                tmp_conn.close()
+                return tmp_path
             except Exception as e:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
                 right_err[0] = e
                 return None
 

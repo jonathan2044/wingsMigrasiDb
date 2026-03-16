@@ -503,7 +503,8 @@ class _SummaryView(QWidget):
             if src.source_type in ("excel", "csv"):
                 name = os.path.basename(src.file_path) if src.file_path else "\u2014"
                 return name + (f" \u2014 {src.sheet_name}" if src.sheet_name else "")
-            return f"{src.schema_name}.{src.table_name} (PostgreSQL)"
+            db_label = "MySQL" if src.source_type == "mysql" else "PostgreSQL"
+            return f"{src.schema_name}.{src.table_name} ({db_label})"
 
         norm_parts = []
         if cfg:
