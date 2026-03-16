@@ -110,6 +110,65 @@ class ColumnTransformRule:
 
 
 @dataclass
+class GroupExpansionRule:
+    """Aturan ekspansi 1-to-many untuk kolom group.
+    Disimpan secara global di settings dan berlaku untuk setiap job
+    yang mengaktifkan opsi 'apply_group_expansion'.
+
+    Contoh: nilai 'AA' di sisi kiri (cust_group) di-expand ke tiga baris
+    di sisi kanan (group_code: 2A0, A21, A2).
+
+    Q5: Jika left value TIDAK ada di mapping → fallback 1-to-1 + warning di log.
+    Q6: Baris kanan tidak ter-cover mapping → dilaporkan MISSING_LEFT.
+    Q7: Satu rule = satu kolom group (satu per konfigurasi global).
+    """
+    left_col: str = ""                              # nama kolom di sisi kiri
+    right_col: str = ""                             # nama kolom di sisi kanan (boleh beda)
+    mapping: Dict[str, List[str]] = field(default_factory=dict)  # {left_val: [rv1, rv2, ...]}
+    enabled: bool = True
+
+    def __post_init__(self):
+        if not self.right_col:
+            self.right_col = self.left_col
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "left_col": self.left_col,
+            "right_col": self.right_col,
+            "mapping": self.mapping,
+            "enabled": self.enabled,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "GroupExpansionRule":
+        left_col  = d.get("left_col", "")
+        right_col = d.get("right_col", "") or left_col
+        raw_map   = d.get("mapping", {})
+        mapping: Dict[str, List[str]] = {}
+        for k, v in raw_map.items():
+            if isinstance(v, list):
+                mapping[str(k)] = [str(x) for x in v]
+            else:
+                mapping[str(k)] = [str(v)]
+        return cls(
+            left_col=left_col,
+            right_col=right_col,
+            mapping=mapping,
+            enabled=bool(d.get("enabled", True)),
+        )
+
+    def total_mappings(self) -> int:
+        """Total entri sisi kanan dari semua nilai kiri."""
+        return sum(len(v) for v in self.mapping.values())
+
+    def describe(self) -> str:
+        n_left  = len(self.mapping)
+        n_right = self.total_mappings()
+        rc = self.right_col if self.right_col != self.left_col else "(sama)"
+        return f"{self.left_col} \u2192 {rc}  ({n_left} kiri, {n_right} kanan)"
+
+
+@dataclass
 class CompareOptions:
     """Opsi normalisasi dan perbandingan data."""
     trim_whitespace: bool = True
@@ -120,6 +179,7 @@ class CompareOptions:
     date_format: str = "%Y-%m-%d"
     decimal_places: int = 2
     apply_global_transforms: bool = True        # gunakan global column transform rules
+    apply_group_expansion: bool = True            # gunakan global group expansion rules
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()

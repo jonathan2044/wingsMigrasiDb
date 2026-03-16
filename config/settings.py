@@ -168,3 +168,22 @@ class AppSettings:
         """Simpan daftar ColumnTransformRule ke settings."""
         self.set("column_transform_rules", [r.to_dict() for r in rules])
         self.save()
+
+    # ------------------------------------------------------------------ group expansion rules
+
+    def get_group_expansion_rules(self) -> list:
+        """Kembalikan daftar GroupExpansionRule yang tersimpan di settings."""
+        from models.compare_config import GroupExpansionRule
+        raw = self.get("group_expansion_rules", [])
+        rules = []
+        for d in raw:
+            try:
+                rules.append(GroupExpansionRule.from_dict(d))
+            except Exception as e:
+                logger.warning("Gagal membaca group expansion rule: %s", e)
+        return rules
+
+    def save_group_expansion_rules(self, rules: list) -> None:
+        """Simpan daftar GroupExpansionRule ke settings."""
+        self.set("group_expansion_rules", [r.to_dict() for r in rules])
+        self.save()

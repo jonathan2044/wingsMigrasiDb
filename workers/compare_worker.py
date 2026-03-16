@@ -148,6 +148,22 @@ class CompareWorker(QThread):
                             f"{len(transform_rules)} rule terdaftar."
                         )
 
+                # Load global group expansion rules jika diaktifkan
+                group_expansion_rules = []
+                if getattr(self._config.options, "apply_group_expansion", True):
+                    group_expansion_rules = self._settings.get_group_expansion_rules()
+                    if group_expansion_rules:
+                        active_ge = [r for r in group_expansion_rules if r.enabled]
+                        if active_ge:
+                            descs = ", ".join(
+                                f"{r.left_col}\u2192{r.right_col if r.right_col != r.left_col else '(sama)'}"
+                                f" ({r.total_mappings()} mapping)"
+                                for r in active_ge[:3]
+                            )
+                            self._log(
+                                f"Group expansion rules: {len(active_ge)} aktif \u2014 {descs}"
+                            )
+
                 engine = CompareEngine(
                     conn=conn,
                     config=self._config,
@@ -155,6 +171,7 @@ class CompareWorker(QThread):
                         step, done, total
                     ),
                     transform_rules=transform_rules,
+                    group_expansion_rules=group_expansion_rules,
                 )
                 summary = engine.run()
 

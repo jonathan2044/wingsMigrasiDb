@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 
 from models.connection_profile import ConnectionProfile
-from models.compare_config import ColumnTransformRule
+from models.compare_config import ColumnTransformRule, GroupExpansionRule
 from ui.styles import COLOR_TEXT_MUTED, COLOR_SUCCESS, COLOR_DANGER, msg_info, msg_warning, msg_critical, msg_question
 
 if TYPE_CHECKING:
@@ -388,6 +388,180 @@ class _TransformRuleDialog(QDialog):
         return self._result_rule
 
 
+# ─── Group Expansion Rule Dialog ──────────────────────────────────────────────
+
+class _GroupExpansionRuleDialog(QDialog):
+    """Dialog tambah/edit GroupExpansionRule — termasuk upload CSV mapping."""
+
+    def __init__(self, rule: GroupExpansionRule = None, parent=None):
+        super().__init__(parent)
+        import os as _os
+        self._os = _os
+        self._mapping: dict = {}
+        self._result_rule = None
+        if rule:
+            self._mapping = {k: list(v) for k, v in rule.mapping.items()}
+        self.setWindowTitle("Aturan Group Expansion")
+        self.setMinimumWidth(580)
+        self._setup_ui()
+        if rule:
+            self._populate(rule)
+
+    def _setup_ui(self):
+        from PySide6.QtWidgets import QAbstractItemView
+        from ui.styles import COLOR_TEXT, COLOR_TEXT_MUTED, COLOR_BORDER
+        vl = QVBoxLayout(self)
+        vl.setSpacing(12)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+        self._left_col = QLineEdit()
+        self._left_col.setPlaceholderText("Contoh: cust_group")
+        form.addRow("Nama Kolom Kiri:", self._left_col)
+
+        self._right_col = QLineEdit()
+        self._right_col.setPlaceholderText("Kosongkan jika sama dengan kolom kiri")
+        form.addRow("Nama Kolom Kanan:", self._right_col)
+
+        self._enabled_chk = QCheckBox("Aktif")
+        self._enabled_chk.setChecked(True)
+        form.addRow("Status:", self._enabled_chk)
+        vl.addLayout(form)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {COLOR_BORDER};")
+        vl.addWidget(sep)
+
+        map_title = QLabel("Mapping CSV")
+        map_title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {COLOR_TEXT};")
+        vl.addWidget(map_title)
+
+        map_hint = QLabel(
+            "Format: left_value,right_value (satu baris per relasi). "
+            "Header opsional (left_value,right_value akan di-skip otomatis).\n"
+            "Contoh:\n  AA,2A0\n  AA,A21\n  AA,A2\n  BB,3B0"
+        )
+        map_hint.setWordWrap(True)
+        map_hint.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 11px;")
+        vl.addWidget(map_hint)
+
+        upload_hl = QHBoxLayout()
+        self._upload_btn = QPushButton("\U0001f4c2 Upload CSV")
+        self._upload_btn.setObjectName("secondaryBtn")
+        self._upload_btn.setFixedHeight(34)
+        self._upload_btn.clicked.connect(self._upload_csv)
+        upload_hl.addWidget(self._upload_btn)
+        self._file_lbl = QLabel("Belum ada file")
+        self._file_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
+        upload_hl.addWidget(self._file_lbl, 1)
+        vl.addLayout(upload_hl)
+
+        self._preview_tbl = QTableWidget(0, 2)
+        self._preview_tbl.setHorizontalHeaderLabels(["Nilai Kiri", "Nilai Kanan"])
+        self._preview_tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self._preview_tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._preview_tbl.setMaximumHeight(190)
+        self._preview_tbl.verticalHeader().setVisible(False)
+        self._preview_tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._preview_tbl.setStyleSheet(
+            "QTableWidget { border: 1px solid #e2e8f0; border-radius: 6px; background: white; }"
+            "QHeaderView::section { background: #f8fafc; color: #475569; font-size: 11px; "
+            "font-weight: 600; border: none; border-bottom: 1px solid #e2e8f0; padding: 4px 8px; }"
+        )
+        vl.addWidget(self._preview_tbl)
+
+        self._map_summary_lbl = QLabel("")
+        self._map_summary_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
+        vl.addWidget(self._map_summary_lbl)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self._on_save)
+        btns.rejected.connect(self.reject)
+        vl.addWidget(btns)
+
+        self._refresh_preview()
+
+    def _populate(self, rule: GroupExpansionRule):
+        self._left_col.setText(rule.left_col)
+        self._right_col.setText(rule.right_col if rule.right_col != rule.left_col else "")
+        self._enabled_chk.setChecked(rule.enabled)
+        self._mapping = {k: list(v) for k, v in rule.mapping.items()}
+        self._file_lbl.setText(f"Mapping: {len(rule.mapping)} nilai kiri, {rule.total_mappings()} nilai kanan")
+        self._refresh_preview()
+
+    def _upload_csv(self):
+        from PySide6.QtWidgets import QFileDialog
+        import os
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Upload Mapping CSV", "", "CSV Files (*.csv);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            self._mapping = self._parse_csv(path)
+            self._file_lbl.setText(os.path.basename(path))
+            self._refresh_preview()
+        except Exception as e:
+            msg_warning(self, "Gagal Baca CSV", f"Error membaca file: {e}")
+
+    @staticmethod
+    def _parse_csv(filepath: str) -> dict:
+        import csv
+        mapping: dict = {}
+        with open(filepath, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) < 2:
+                    continue
+                lv = row[0].strip()
+                rv = row[1].strip()
+                if not lv or not rv:
+                    continue
+                if lv.lower() in ("left_value", "left_val", "kiri") and rv.lower() in ("right_value", "right_val", "kanan"):
+                    continue
+                mapping.setdefault(lv, []).append(rv)
+        return mapping
+
+    def _refresh_preview(self):
+        self._preview_tbl.setRowCount(0)
+        for lv, rvs in list(self._mapping.items())[:20]:
+            r = self._preview_tbl.rowCount()
+            self._preview_tbl.insertRow(r)
+            self._preview_tbl.setRowHeight(r, 26)
+            self._preview_tbl.setItem(r, 0, QTableWidgetItem(str(lv)))
+            self._preview_tbl.setItem(r, 1, QTableWidgetItem(", ".join(str(v) for v in rvs)))
+        n_left  = len(self._mapping)
+        n_right = sum(len(v) for v in self._mapping.values())
+        if n_left > 0:
+            extra = f" (tampil {min(20, n_left)} dari {n_left})" if n_left > 20 else ""
+            self._map_summary_lbl.setText(f"Total: {n_left} nilai kiri, {n_right} nilai kanan{extra}")
+        else:
+            self._map_summary_lbl.setText("Belum ada mapping. Upload CSV terlebih dahulu.")
+
+    def _on_save(self):
+        lc = self._left_col.text().strip()
+        rc = self._right_col.text().strip() or lc
+        if not lc:
+            msg_warning(self, "Isian Tidak Lengkap", "Nama Kolom Kiri tidak boleh kosong.")
+            return
+        if not self._mapping:
+            msg_warning(self, "Mapping Kosong", "Upload CSV mapping terlebih dahulu.")
+            return
+        self._result_rule = GroupExpansionRule(
+            left_col=lc,
+            right_col=rc,
+            mapping=self._mapping,
+            enabled=self._enabled_chk.isChecked(),
+        )
+        self.accept()
+
+    def get_rule(self) -> GroupExpansionRule:
+        return self._result_rule
+
+
 class SettingsPage(QWidget):
 
     def __init__(
@@ -416,8 +590,9 @@ class SettingsPage(QWidget):
 
         tabs.addTab(self._build_connection_tab(), "🔌 Koneksi Database")
         tabs.addTab(self._build_general_tab(), "⚙ Umum")
-        tabs.addTab(self._build_transform_tab(), "🔧 Transformasi Kolom")
-        tabs.addTab(self._build_about_tab(), "ℹ Tentang Aplikasi")
+        tabs.addTab(self._build_transform_tab(), "\U0001f527 Transformasi Kolom")
+        tabs.addTab(self._build_group_expansion_tab(), "\U0001f500 Group Expansion")
+        tabs.addTab(self._build_about_tab(), "\u2139 Tentang Aplikasi")
 
         root.addWidget(tabs, 1)
 
@@ -684,6 +859,146 @@ class SettingsPage(QWidget):
             rules.pop(index)
             self._settings.save_transform_rules(rules)
             self._refresh_rules_table()
+
+    # ------------------------------------------------------------------ group expansion tab
+
+    def _build_group_expansion_tab(self) -> QWidget:
+        """Tab manajemen global group expansion 1-to-many rules."""
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        desc = QLabel(
+            "Aturan ekspansi kolom group 1-to-many \u2014 berlaku untuk semua job yang mengaktifkan "
+            "opsi ini di Step 4.\n"
+            "Contoh: nilai \u2018AA\u2019 di sisi kiri (kolom cust_group) di-expand ke beberapa baris "
+            "di sisi kanan (group_code: 2A0, A21, A2).\n\n"
+            "\u2022 Q5: Nilai kiri tidak ada di mapping \u2192 fallback 1-to-1 + warning di log.\n"
+            "\u2022 Q6: Baris kanan tidak ter-cover mapping \u2192 MISSING_LEFT.\n"
+            "\u2022 Aturan dicocokkan berdasarkan nama kolom (case-insensitive)."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
+        layout.addWidget(desc)
+
+        hdr_hl = QHBoxLayout()
+        hdr_hl.addWidget(QLabel("Daftar Aturan Group Expansion"))
+        hdr_hl.addStretch()
+        add_btn = QPushButton("+ Tambah Rule")
+        add_btn.clicked.connect(self._add_ge_rule)
+        hdr_hl.addWidget(add_btn)
+        layout.addLayout(hdr_hl)
+
+        self._ge_table = QTableWidget(0, 5)
+        self._ge_table.setHorizontalHeaderLabels(["Kolom Kiri", "Kolom Kanan", "Total Mapping", "Status", "Aksi"])
+        hh = self._ge_table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self._ge_table.setColumnWidth(4, 140)
+        self._ge_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._ge_table.verticalHeader().setVisible(False)
+        self._ge_table.setStyleSheet(
+            "QTableWidget { border: 1px solid #e2e8f0; border-radius: 8px; background: white; }"
+            "QHeaderView::section { background: #f8fafc; color: #475569; font-size: 12px; "
+            "font-weight: 600; border: none; border-bottom: 1px solid #e2e8f0; padding: 6px 8px; }"
+            "QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid #f1f5f9; }"
+        )
+        layout.addWidget(self._ge_table, 1)
+
+        self._no_ge_lbl = QLabel("Belum ada rule. Klik '+ Tambah Rule' untuk mulai.")
+        self._no_ge_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._no_ge_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 13px; padding: 20px;")
+        layout.addWidget(self._no_ge_lbl)
+
+        self._refresh_ge_table()
+        return w
+
+    def _refresh_ge_table(self):
+        rules = self._settings.get_group_expansion_rules()
+        self._ge_table.setRowCount(0)
+        self._no_ge_lbl.setVisible(len(rules) == 0)
+        self._ge_table.setVisible(len(rules) > 0)
+
+        for i, rule in enumerate(rules):
+            r = self._ge_table.rowCount()
+            self._ge_table.insertRow(r)
+            self._ge_table.setRowHeight(r, 34)
+
+            rc_disp  = rule.right_col if rule.right_col != rule.left_col else "(sama)"
+            n_left   = len(rule.mapping)
+            n_right  = rule.total_mappings()
+
+            self._ge_table.setItem(r, 0, QTableWidgetItem(rule.left_col))
+            self._ge_table.setItem(r, 1, QTableWidgetItem(rc_disp))
+            self._ge_table.setItem(r, 2, QTableWidgetItem(f"{n_left} kiri, {n_right} kanan"))
+
+            status_w  = QWidget()
+            status_hl = QHBoxLayout(status_w)
+            status_hl.setContentsMargins(6, 2, 6, 2)
+            badge = QLabel("\u2713 Aktif" if rule.enabled else "\u2717 Nonaktif")
+            badge.setStyleSheet(
+                "background: #dcfce7; color: #15803d; border-radius: 4px; padding: 1px 8px; font-size: 11px; font-weight: 700;"
+                if rule.enabled else
+                "background: #f1f5f9; color: #64748b; border-radius: 4px; padding: 1px 8px; font-size: 11px; font-weight: 700;"
+            )
+            status_hl.addStretch()
+            status_hl.addWidget(badge)
+            status_hl.addStretch()
+            self._ge_table.setCellWidget(r, 3, status_w)
+
+            act_w  = QWidget()
+            act_hl = QHBoxLayout(act_w)
+            act_hl.setContentsMargins(4, 2, 4, 2)
+            act_hl.setSpacing(4)
+            edit_btn = QPushButton("Edit")
+            edit_btn.setObjectName("secondaryBtn")
+            edit_btn.setFixedHeight(26)
+            edit_btn.clicked.connect(lambda _, idx=i: self._edit_ge_rule(idx))
+            act_hl.addWidget(edit_btn)
+            del_btn = QPushButton("Hapus")
+            del_btn.setObjectName("dangerBtn")
+            del_btn.setFixedHeight(26)
+            del_btn.clicked.connect(lambda _, idx=i: self._delete_ge_rule(idx))
+            act_hl.addWidget(del_btn)
+            self._ge_table.setCellWidget(r, 4, act_w)
+
+    def _add_ge_rule(self):
+        dlg = _GroupExpansionRuleDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            rule = dlg.get_rule()
+            if rule:
+                rules = self._settings.get_group_expansion_rules()
+                rules.append(rule)
+                self._settings.save_group_expansion_rules(rules)
+                self._refresh_ge_table()
+                msg_info(self, "Rule Ditambahkan",
+                         f"Rule expansion untuk kolom '{rule.left_col}' berhasil disimpan.")
+
+    def _edit_ge_rule(self, index: int):
+        rules = self._settings.get_group_expansion_rules()
+        if index < 0 or index >= len(rules):
+            return
+        dlg = _GroupExpansionRuleDialog(rule=rules[index], parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            rule = dlg.get_rule()
+            if rule:
+                rules[index] = rule
+                self._settings.save_group_expansion_rules(rules)
+                self._refresh_ge_table()
+
+    def _delete_ge_rule(self, index: int):
+        rules = self._settings.get_group_expansion_rules()
+        if index < 0 or index >= len(rules):
+            return
+        rule = rules[index]
+        if msg_question(self, "Hapus Rule", f"Hapus rule expansion untuk kolom '{rule.left_col}'?"):
+            rules.pop(index)
+            self._settings.save_group_expansion_rules(rules)
+            self._refresh_ge_table()
 
     def _build_about_tab(self) -> QWidget:
         w = QWidget()

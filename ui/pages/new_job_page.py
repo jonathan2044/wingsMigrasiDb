@@ -2355,6 +2355,44 @@ class _Step4Options(QWidget):
         vl.addWidget(tr_card)
         self._refresh_transform_summary()
 
+        # Group Expansion card
+        ge_card = _Card()
+        ge_vl = QVBoxLayout(ge_card)
+        ge_vl.setContentsMargins(20, 18, 20, 18)
+        ge_vl.setSpacing(0)
+        ge_hdr = QHBoxLayout()
+        ge_hdr.addWidget(QLabel("\U0001f500"))
+        ge_title = QLabel("1-to-Many Group Expansion")
+        ge_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {COLOR_TEXT};")
+        ge_hdr.addWidget(ge_title)
+        ge_hdr.addStretch()
+        ge_vl.addLayout(ge_hdr)
+        ge_sub = QLabel(
+            "Terapkan aturan ekspansi group global dari Settings. "
+            "Berlaku untuk kolom yang namanya cocok dengan rule. "
+            "Nilai kiri tidak ada di mapping \u2192 fallback 1-to-1 + warning log. "
+            "Baris kanan tidak ter-cover \u2192 MISSING_LEFT."
+        )
+        ge_sub.setWordWrap(True)
+        ge_sub.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
+        ge_vl.addWidget(ge_sub)
+        ge_vl.addSpacing(10)
+        self._opt_group_expansion = _NormToggleRow(
+            "Aktifkan Group Expansion",
+            "ON = rules dari Settings diterapkan pada kolom yang cocok namanya",
+            True,
+        )
+        ge_vl.addWidget(self._opt_group_expansion)
+        ge_vl.addWidget(_Divider())
+        self._ge_rules_summary = QLabel("")
+        self._ge_rules_summary.setWordWrap(True)
+        self._ge_rules_summary.setStyleSheet(
+            f"color: {COLOR_TEXT_MUTED}; font-size: 12px; padding: 4px 0;"
+        )
+        ge_vl.addWidget(self._ge_rules_summary)
+        vl.addWidget(ge_card)
+        self._refresh_ge_summary()
+
         sum_card = _Card()
         s_vl = QVBoxLayout(sum_card)
         s_vl.setContentsMargins(20, 18, 20, 18)
@@ -2411,13 +2449,13 @@ class _Step4Options(QWidget):
 
     def update_normalizations_label(self):
         active = []
-        if self._opt_trim.is_checked(): active.append("Trim whitespace")
-        if self._opt_case.is_checked(): active.append("Ignore case")
-        if self._opt_null.is_checked(): active.append("Empty = null")
-        if self._opt_date.is_checked(): active.append("Normalize date")
-        if self._opt_num.is_checked():  active.append("Normalize number")
-        if self._opt_transforms.is_checked():
-            active.append("Global transforms")
+        if self._opt_trim.is_checked():            active.append("Trim whitespace")
+        if self._opt_case.is_checked():            active.append("Ignore case")
+        if self._opt_null.is_checked():            active.append("Empty = null")
+        if self._opt_date.is_checked():            active.append("Normalize date")
+        if self._opt_num.is_checked():             active.append("Normalize number")
+        if self._opt_transforms.is_checked():      active.append("Global transforms")
+        if self._opt_group_expansion.is_checked(): active.append("Group expansion")
         self._summary_rows[6][1].setText(", ".join(active) if active else "Tidak ada")
 
     def _refresh_transform_summary(self):
@@ -2440,6 +2478,29 @@ class _Step4Options(QWidget):
             txt = f"{len(active)} rule aktif: {names}{suffix}"
         self._transform_rules_summary.setText(txt)
 
+    def _refresh_ge_summary(self):
+        """Tampilkan ringkasan global group expansion rules yang aktif."""
+        if self._settings is None:
+            self._ge_rules_summary.setText("(Settings tidak tersedia)")
+            return
+        try:
+            rules = self._settings.get_group_expansion_rules()
+        except Exception:
+            rules = []
+        active = [r for r in rules if r.enabled]
+        if not rules:
+            txt = "Belum ada rule \u2014 konfigurasi di Settings > Group Expansion"
+        elif not active:
+            txt = f"{len(rules)} rule terdaftar, semua nonaktif"
+        else:
+            parts = [
+                f"{r.left_col} \u2192 {r.right_col if r.right_col != r.left_col else '(sama)'} ({r.total_mappings()} mapping)"
+                for r in active[:3]
+            ]
+            suffix = f" +{len(active)-3} lainnya" if len(active) > 3 else ""
+            txt = f"{len(active)} rule aktif: {'; '.join(parts)}{suffix}"
+        self._ge_rules_summary.setText(txt)
+
     def get_options(self) -> CompareOptions:
         return CompareOptions(
             trim_whitespace=self._opt_trim.is_checked(),
@@ -2448,6 +2509,7 @@ class _Step4Options(QWidget):
             normalize_date=self._opt_date.is_checked(),
             normalize_number=self._opt_num.is_checked(),
             apply_global_transforms=self._opt_transforms.is_checked(),
+            apply_group_expansion=self._opt_group_expansion.is_checked(),
         )
 
     def should_save_template(self) -> bool:
