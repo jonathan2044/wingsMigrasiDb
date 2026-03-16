@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Callable, Optional
 
 import duckdb
 
-from models.compare_config import CompareConfig, ColumnMapping
+from models.compare_config import CompareConfig, ColumnMapping, ColumnTransformRule
 from core.normalization_engine import NormalizationEngine
 from config.constants import (
     RESULT_MATCH, RESULT_MISMATCH,
@@ -48,11 +48,13 @@ class CompareEngine:
         conn: duckdb.DuckDBPyConnection,
         config: CompareConfig,
         progress_cb: Optional[ProgressCallback] = None,
+        transform_rules: Optional[List[ColumnTransformRule]] = None,
     ):
         self._conn = conn
         self._config = config
         self._progress_cb = progress_cb or (lambda *_: None)
         self._norm = NormalizationEngine(config.options)
+        self._transform_rules: List[ColumnTransformRule] = transform_rules or []
 
     # ------------------------------------------------------------------ public
 
@@ -127,6 +129,15 @@ class CompareEngine:
             f"CREATE VIEW normalized_right AS SELECT {right_parts} FROM src_right"
         )
 
+    def _get_rules_for_col(self, col_name: str, side: str) -> List[ColumnTransformRule]:
+        """Ambil transform rules yang berlaku untuk kolom dan sisi tertentu."""
+        return [
+            r for r in self._transform_rules
+            if r.enabled
+            and r.column_name.lower() == col_name.lower()
+            and r.side in (side, "both")
+        ]
+
     def _build_select_parts(
         self,
         table: str,
@@ -143,9 +154,10 @@ class CompareEngine:
             expr = f'TRIM(CAST("{table}"."{col}" AS VARCHAR))'
             parts.append(f'{expr} AS "key_{alias}"')
 
-        # Value columns: normalisasi penuh
+        # Value columns: normalisasi penuh + transform rules
         for col in value_cols:
-            expr = self._norm._build_expr_for_table_col(table, col)
+            col_rules = self._get_rules_for_col(col, prefix)  # prefix = "left" or "right"
+            expr = self._norm._build_expr_for_table_col(table, col, col_rules)
             parts.append(f'{expr} AS "{prefix}_{col}"')
 
         # Tambah row number untuk referensi

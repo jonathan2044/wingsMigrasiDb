@@ -9,9 +9,12 @@ sehingga tidak perlu load ke Python memory.
 """
 
 from __future__ import annotations
-from typing import List
+from typing import List, TYPE_CHECKING
 
 from models.compare_config import CompareOptions
+
+if TYPE_CHECKING:
+    from models.compare_config import ColumnTransformRule
 
 
 class NormalizationEngine:
@@ -81,16 +84,62 @@ class NormalizationEngine:
         for col in columns:
             if col in key_columns:
                 continue
-            expr = self.build_col_expr(f'{table_alias}"."{col}')
-            # Fix: rebuild properly
             expr = self._build_expr_for_table_col(table_alias, col)
             alias = f'"{prefix}{col}"' if prefix else f'"{col}"'
             parts.append(f"{expr} AS {alias}")
 
         return ", ".join(parts)
 
-    def _build_expr_for_table_col(self, table_alias: str, col: str) -> str:
-        """Bangun ekspresi normalisasi untuk kolom di tabel tertentu."""
+    def _apply_transform(self, expr: str, rule: "ColumnTransformRule") -> str:
+        """Terapkan satu aturan transformasi ke ekspresi SQL yang sudah ada."""
+        t = rule.transform_type
+        p = rule.params
+
+        def _esc(s: str) -> str:
+            """Escape single-quote untuk SQL string literal."""
+            return str(s).replace("'", "''")
+
+        if t == "prefix":
+            text = _esc(p.get("text", ""))
+            return f"CONCAT('{text}', {expr})"
+        elif t == "suffix":
+            text = _esc(p.get("text", ""))
+            return f"CONCAT({expr}, '{text}')"
+        elif t == "lpad":
+            length = max(1, int(p.get("length", 10)))
+            pad_char = _esc(p.get("pad_char", "0"))[:1] or "0"
+            return f"LPAD({expr}, {length}, '{pad_char}')"
+        elif t == "rpad":
+            length = max(1, int(p.get("length", 10)))
+            pad_char = _esc(p.get("pad_char", " "))[:1] or " "
+            return f"RPAD({expr}, {length}, '{pad_char}')"
+        elif t == "strip_chars":
+            chars = p.get("chars", "")
+            for ch in chars:
+                expr = f"REPLACE({expr}, '{_esc(ch)}', '')"
+            return expr
+        elif t == "replace":
+            old = _esc(p.get("old", ""))
+            new = _esc(p.get("new", ""))
+            if old:
+                return f"REPLACE({expr}, '{old}', '{new}')"
+            return expr
+        elif t == "substring":
+            start = max(1, int(p.get("start", 1)))
+            length = max(1, int(p.get("length", 10)))
+            return f"SUBSTR({expr}, {start}, {length})"
+        return expr
+
+    def _build_expr_for_table_col(
+        self,
+        table_alias: str,
+        col: str,
+        col_rules: "List[ColumnTransformRule] | None" = None,
+    ) -> str:
+        """Bangun ekspresi normalisasi untuk kolom di tabel tertentu.
+        Normalisasi dasar (trim/lower/null/date/number) diterapkan lebih dulu,
+        kemudian transform rules per-kolom diterapkan di atasnya.
+        """
         expr = f'CAST("{table_alias}"."{col}" AS VARCHAR)'
 
         if self._opts.treat_empty_as_null:
@@ -115,5 +164,11 @@ class NormalizationEngine:
             # Jika nilai bukan angka, kembalikan nilai aslinya (jangan NULL)
             num_expr = f"TRY(PRINTF('%.{dp}f', TRY_CAST({expr} AS DOUBLE)))"
             expr = f"COALESCE({num_expr}, {expr})"
+
+        # Terapkan per-kolom transform rules (setelah normalisasi dasar)
+        if col_rules:
+            for rule in col_rules:
+                if rule.enabled:
+                    expr = self._apply_transform(expr, rule)
 
         return expr

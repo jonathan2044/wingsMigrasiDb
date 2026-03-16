@@ -14,10 +14,12 @@ from PySide6.QtWidgets import (
     QFrame, QLineEdit, QSpinBox, QComboBox, QFormLayout,
     QGroupBox, QTabWidget, QScrollArea,
     QTableWidget, QTableWidgetItem, QHeaderView, QButtonGroup, QRadioButton,
+    QDialog, QCheckBox, QDialogButtonBox, QStackedWidget, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
 
 from models.connection_profile import ConnectionProfile
+from models.compare_config import ColumnTransformRule
 from ui.styles import COLOR_TEXT_MUTED, COLOR_SUCCESS, COLOR_DANGER, msg_info, msg_warning, msg_critical, msg_question
 
 if TYPE_CHECKING:
@@ -160,8 +162,233 @@ class ConnectionFormDialog(QWidget):
         return self._profile
 
 
+# ─── Transform Rule Dialog ────────────────────────────────────────────────────
+
+class _TransformRuleDialog(QDialog):
+    """Dialog tambah / edit aturan transformasi kolom."""
+
+    _TYPES = ["prefix", "suffix", "lpad", "rpad", "strip_chars", "replace", "substring"]
+    _TYPE_LABELS = {
+        "prefix":      "Prefix — tambah teks di depan value",
+        "suffix":      "Suffix — tambah teks di belakang value",
+        "lpad":        "LPAD — zero-pad / pad kiri ke panjang N",
+        "rpad":        "RPAD — pad kanan ke panjang N",
+        "strip_chars": "Strip Chars — hapus karakter tertentu",
+        "replace":     "Replace — ganti teks A dengan B",
+        "substring":   "Substring — ambil N karakter mulai posisi X",
+    }
+    _SIDE_VALUES = ["both", "left", "right"]
+    _SIDE_LABELS = ["Kedua Sisi", "Kiri Saja", "Kanan Saja"]
+
+    def __init__(self, rule: ColumnTransformRule = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Tambah Rule Transformasi" if rule is None else "Edit Rule Transformasi")
+        self.setModal(True)
+        self.setMinimumWidth(480)
+        self._result_rule: ColumnTransformRule = None
+        self._setup_ui()
+        if rule:
+            self._populate(rule)
+        else:
+            self._update_params_ui(self._type_combo.currentData())
+
+    def _setup_ui(self):
+        vl = QVBoxLayout(self)
+        vl.setSpacing(14)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self._col_name = QLineEdit()
+        self._col_name.setPlaceholderText("contoh: sls_code  (case-insensitive)")
+        form.addRow("Nama Kolom:", self._col_name)
+
+        self._side_combo = QComboBox()
+        for label in self._SIDE_LABELS:
+            self._side_combo.addItem(label)
+        form.addRow("Terapkan ke Sisi:", self._side_combo)
+
+        self._type_combo = QComboBox()
+        for k in self._TYPES:
+            self._type_combo.addItem(self._TYPE_LABELS[k], k)
+        self._type_combo.currentIndexChanged.connect(
+            lambda _: self._update_params_ui(self._type_combo.currentData())
+        )
+        form.addRow("Tipe Transform:", self._type_combo)
+
+        vl.addLayout(form)
+
+        # ── Params box ──
+        self._params_box = QGroupBox("Parameter")
+        pb_vl = QVBoxLayout(self._params_box)
+        pb_vl.setSpacing(8)
+
+        # prefix / suffix → text
+        self._w_text = QWidget()
+        wt_hl = QHBoxLayout(self._w_text)
+        wt_hl.setContentsMargins(0, 0, 0, 0)
+        wt_hl.addWidget(QLabel("Teks:"))
+        self._p_text = QLineEdit()
+        self._p_text.setPlaceholderText("contoh: S0")
+        wt_hl.addWidget(self._p_text)
+        pb_vl.addWidget(self._w_text)
+
+        # lpad / rpad → length + pad_char
+        self._w_padlen = QWidget()
+        wpl_hl = QHBoxLayout(self._w_padlen)
+        wpl_hl.setContentsMargins(0, 0, 0, 0)
+        wpl_hl.addWidget(QLabel("Panjang target:"))
+        self._p_length = QSpinBox()
+        self._p_length.setRange(1, 255)
+        self._p_length.setValue(8)
+        self._p_length.setFixedWidth(70)
+        wpl_hl.addWidget(self._p_length)
+        wpl_hl.addSpacing(16)
+        wpl_hl.addWidget(QLabel("Karakter pad:"))
+        self._p_pad_char = QLineEdit()
+        self._p_pad_char.setMaxLength(1)
+        self._p_pad_char.setText("0")
+        self._p_pad_char.setFixedWidth(40)
+        wpl_hl.addWidget(self._p_pad_char)
+        wpl_hl.addStretch()
+        pb_vl.addWidget(self._w_padlen)
+
+        # strip_chars → chars
+        self._w_chars = QWidget()
+        wc_hl = QHBoxLayout(self._w_chars)
+        wc_hl.setContentsMargins(0, 0, 0, 0)
+        wc_hl.addWidget(QLabel("Karakter yang dihapus:"))
+        self._p_chars = QLineEdit()
+        self._p_chars.setPlaceholderText("contoh: -. (tanpa spasi antar karakter)")
+        wc_hl.addWidget(self._p_chars)
+        pb_vl.addWidget(self._w_chars)
+
+        # replace → old + new
+        self._w_replace = QWidget()
+        wr_vl = QVBoxLayout(self._w_replace)
+        wr_vl.setContentsMargins(0, 0, 0, 0)
+        wr_vl.setSpacing(6)
+        wr_old = QHBoxLayout()
+        wr_old.addWidget(QLabel("Cari:  "))
+        self._p_old = QLineEdit()
+        self._p_old.setPlaceholderText("teks yang dicari")
+        wr_old.addWidget(self._p_old)
+        wr_new = QHBoxLayout()
+        wr_new.addWidget(QLabel("Ganti:"))
+        self._p_new = QLineEdit()
+        self._p_new.setPlaceholderText("teks pengganti (kosongkan untuk hapus)")
+        wr_new.addWidget(self._p_new)
+        wr_vl.addLayout(wr_old)
+        wr_vl.addLayout(wr_new)
+        pb_vl.addWidget(self._w_replace)
+
+        # substring → start + length
+        self._w_substr = QWidget()
+        ws_hl = QHBoxLayout(self._w_substr)
+        ws_hl.setContentsMargins(0, 0, 0, 0)
+        ws_hl.addWidget(QLabel("Mulai posisi (1-based):"))
+        self._p_start = QSpinBox()
+        self._p_start.setRange(1, 9999)
+        self._p_start.setValue(1)
+        self._p_start.setFixedWidth(70)
+        ws_hl.addWidget(self._p_start)
+        ws_hl.addSpacing(16)
+        ws_hl.addWidget(QLabel("Panjang:"))
+        self._p_substr_len = QSpinBox()
+        self._p_substr_len.setRange(1, 9999)
+        self._p_substr_len.setValue(10)
+        self._p_substr_len.setFixedWidth(70)
+        ws_hl.addWidget(self._p_substr_len)
+        ws_hl.addStretch()
+        pb_vl.addWidget(self._w_substr)
+
+        vl.addWidget(self._params_box)
+
+        # ── Enabled toggle ──
+        enabled_hl = QHBoxLayout()
+        self._enabled_chk = QCheckBox("Rule ini aktif")
+        self._enabled_chk.setChecked(True)
+        enabled_hl.addWidget(self._enabled_chk)
+        enabled_hl.addStretch()
+        vl.addLayout(enabled_hl)
+
+        # ── Buttons ──
+        btns = QHBoxLayout()
+        btns.addStretch()
+        cancel_btn = QPushButton("Batal")
+        cancel_btn.setObjectName("secondaryBtn")
+        cancel_btn.clicked.connect(self.reject)
+        ok_btn = QPushButton("Simpan Rule")
+        ok_btn.clicked.connect(self._on_save)
+        btns.addWidget(cancel_btn)
+        btns.addWidget(ok_btn)
+        vl.addLayout(btns)
+
+    def _update_params_ui(self, t: str):
+        """Tampilkan hanya widget parameter yang relevan untuk tipe t."""
+        self._w_text.setVisible(t in ("prefix", "suffix"))
+        self._w_padlen.setVisible(t in ("lpad", "rpad"))
+        self._w_chars.setVisible(t == "strip_chars")
+        self._w_replace.setVisible(t == "replace")
+        self._w_substr.setVisible(t == "substring")
+        self.adjustSize()
+
+    def _populate(self, rule: ColumnTransformRule):
+        self._col_name.setText(rule.column_name)
+        idx_side = self._SIDE_VALUES.index(rule.side) if rule.side in self._SIDE_VALUES else 0
+        self._side_combo.setCurrentIndex(idx_side)
+        idx_type = self._TYPES.index(rule.transform_type) if rule.transform_type in self._TYPES else 0
+        self._type_combo.setCurrentIndex(idx_type)
+        self._enabled_chk.setChecked(rule.enabled)
+        p = rule.params
+        self._p_text.setText(p.get("text", ""))
+        self._p_length.setValue(int(p.get("length", 8)))
+        self._p_pad_char.setText(p.get("pad_char", "0"))
+        self._p_chars.setText(p.get("chars", ""))
+        self._p_old.setText(p.get("old", ""))
+        self._p_new.setText(p.get("new", ""))
+        self._p_start.setValue(int(p.get("start", 1)))
+        self._p_substr_len.setValue(int(p.get("length", 10)))
+        self._update_params_ui(rule.transform_type)
+
+    def _on_save(self):
+        col = self._col_name.text().strip()
+        if not col:
+            from ui.styles import msg_warning
+            msg_warning(self, "Nama Kolom Kosong", "Isi nama kolom terlebih dahulu.")
+            return
+        t = self._type_combo.currentData()
+        side = self._SIDE_VALUES[self._side_combo.currentIndex()]
+        params = self._build_params(t)
+        self._result_rule = ColumnTransformRule(
+            column_name=col,
+            side=side,
+            transform_type=t,
+            params=params,
+            enabled=self._enabled_chk.isChecked(),
+        )
+        self.accept()
+
+    def _build_params(self, t: str) -> dict:
+        if t in ("prefix", "suffix"):
+            return {"text": self._p_text.text()}
+        elif t == "lpad":
+            return {"length": self._p_length.value(), "pad_char": self._p_pad_char.text() or "0"}
+        elif t == "rpad":
+            return {"length": self._p_length.value(), "pad_char": self._p_pad_char.text() or " "}
+        elif t == "strip_chars":
+            return {"chars": self._p_chars.text()}
+        elif t == "replace":
+            return {"old": self._p_old.text(), "new": self._p_new.text()}
+        elif t == "substring":
+            return {"start": self._p_start.value(), "length": self._p_substr_len.value()}
+        return {}
+
+    def get_rule(self) -> ColumnTransformRule:
+        return self._result_rule
+
+
 class SettingsPage(QWidget):
-    """Halaman pengaturan lengkap aplikasi."""
 
     def __init__(
         self,
@@ -189,6 +416,7 @@ class SettingsPage(QWidget):
 
         tabs.addTab(self._build_connection_tab(), "🔌 Koneksi Database")
         tabs.addTab(self._build_general_tab(), "⚙ Umum")
+        tabs.addTab(self._build_transform_tab(), "🔧 Transformasi Kolom")
         tabs.addTab(self._build_about_tab(), "ℹ Tentang Aplikasi")
 
         root.addWidget(tabs, 1)
@@ -314,6 +542,148 @@ class SettingsPage(QWidget):
 
         layout.addStretch()
         return w
+
+    def _build_transform_tab(self) -> QWidget:
+        """Tab manajemen global column transformation rules."""
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        desc = QLabel(
+            "Aturan transformasi kolom global — diterapkan otomatis pada setiap job "
+            "yang mengaktifkan opsi ini di Step 4.\n"
+            "Contoh: tambah prefix 'S0' pada kolom sls_code, "
+            "atau zero-pad kolom kode_barang ke 8 digit."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
+        layout.addWidget(desc)
+
+        hdr_hl = QHBoxLayout()
+        hdr_hl.addWidget(QLabel("Daftar Aturan Transformasi"))
+        hdr_hl.addStretch()
+        add_btn = QPushButton("+ Tambah Rule")
+        add_btn.clicked.connect(self._add_transform_rule)
+        hdr_hl.addWidget(add_btn)
+        layout.addLayout(hdr_hl)
+
+        self._rules_table = QTableWidget(0, 6)
+        self._rules_table.setHorizontalHeaderLabels([
+            "Nama Kolom", "Sisi", "Transform", "Parameter", "Status", "Aksi"
+        ])
+        hh = self._rules_table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self._rules_table.setColumnWidth(5, 140)
+        self._rules_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._rules_table.verticalHeader().setVisible(False)
+        self._rules_table.setStyleSheet(
+            "QTableWidget { border: 1px solid #e2e8f0; border-radius: 8px; background: white; }"
+            "QHeaderView::section { background: #f8fafc; color: #475569; font-size: 12px; "
+            "font-weight: 600; border: none; border-bottom: 1px solid #e2e8f0; padding: 6px 8px; }"
+            "QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid #f1f5f9; }"
+        )
+        layout.addWidget(self._rules_table, 1)
+
+        self._no_rules_lbl = QLabel("Belum ada rule transformasi. Klik '+ Tambah Rule' untuk mulai.")
+        self._no_rules_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._no_rules_lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 13px; padding: 20px;")
+        layout.addWidget(self._no_rules_lbl)
+
+        self._refresh_rules_table()
+        return w
+
+    def _refresh_rules_table(self):
+        rules = self._settings.get_transform_rules()
+        self._rules_table.setRowCount(0)
+        self._no_rules_lbl.setVisible(len(rules) == 0)
+        self._rules_table.setVisible(len(rules) > 0)
+
+        _SIDE_LABELS = {"both": "Keduanya", "left": "Kiri", "right": "Kanan"}
+        _TYPE_SHORT = {
+            "prefix": "Prefix", "suffix": "Suffix",
+            "lpad": "LPAD", "rpad": "RPAD",
+            "strip_chars": "Strip Chars", "replace": "Replace",
+            "substring": "Substring",
+        }
+
+        for i, rule in enumerate(rules):
+            r = self._rules_table.rowCount()
+            self._rules_table.insertRow(r)
+            self._rules_table.setRowHeight(r, 34)
+
+            self._rules_table.setItem(r, 0, QTableWidgetItem(rule.column_name))
+            self._rules_table.setItem(r, 1, QTableWidgetItem(_SIDE_LABELS.get(rule.side, rule.side)))
+            self._rules_table.setItem(r, 2, QTableWidgetItem(_TYPE_SHORT.get(rule.transform_type, rule.transform_type)))
+            self._rules_table.setItem(r, 3, QTableWidgetItem(rule.describe_params()))
+
+            status_w = QWidget()
+            status_hl = QHBoxLayout(status_w)
+            status_hl.setContentsMargins(6, 2, 6, 2)
+            badge = QLabel("✓ Aktif" if rule.enabled else "✗ Nonaktif")
+            badge.setStyleSheet(
+                "background: #dcfce7; color: #15803d; border-radius: 4px; padding: 1px 8px; font-size: 11px; font-weight: 700;"
+                if rule.enabled else
+                "background: #f1f5f9; color: #64748b; border-radius: 4px; padding: 1px 8px; font-size: 11px; font-weight: 700;"
+            )
+            status_hl.addStretch()
+            status_hl.addWidget(badge)
+            status_hl.addStretch()
+            self._rules_table.setCellWidget(r, 4, status_w)
+
+            act_w = QWidget()
+            act_hl = QHBoxLayout(act_w)
+            act_hl.setContentsMargins(4, 2, 4, 2)
+            act_hl.setSpacing(4)
+            edit_btn = QPushButton("Edit")
+            edit_btn.setObjectName("secondaryBtn")
+            edit_btn.setFixedHeight(26)
+            edit_btn.clicked.connect(lambda _, idx=i: self._edit_transform_rule(idx))
+            act_hl.addWidget(edit_btn)
+            del_btn = QPushButton("Hapus")
+            del_btn.setObjectName("dangerBtn")
+            del_btn.setFixedHeight(26)
+            del_btn.clicked.connect(lambda _, idx=i: self._delete_transform_rule(idx))
+            act_hl.addWidget(del_btn)
+            self._rules_table.setCellWidget(r, 5, act_w)
+
+    def _add_transform_rule(self):
+        dlg = _TransformRuleDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            rule = dlg.get_rule()
+            if rule:
+                rules = self._settings.get_transform_rules()
+                rules.append(rule)
+                self._settings.save_transform_rules(rules)
+                self._refresh_rules_table()
+                msg_info(self, "Rule Ditambahkan", f"Rule untuk kolom '{rule.column_name}' berhasil disimpan.")
+
+    def _edit_transform_rule(self, index: int):
+        rules = self._settings.get_transform_rules()
+        if index < 0 or index >= len(rules):
+            return
+        dlg = _TransformRuleDialog(rule=rules[index], parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            rule = dlg.get_rule()
+            if rule:
+                rules[index] = rule
+                self._settings.save_transform_rules(rules)
+                self._refresh_rules_table()
+
+    def _delete_transform_rule(self, index: int):
+        rules = self._settings.get_transform_rules()
+        if index < 0 or index >= len(rules):
+            return
+        rule = rules[index]
+        if msg_question(self, "Hapus Rule", f"Hapus rule untuk kolom '{rule.column_name}'?"):
+            rules.pop(index)
+            self._settings.save_transform_rules(rules)
+            self._refresh_rules_table()
 
     def _build_about_tab(self) -> QWidget:
         w = QWidget()

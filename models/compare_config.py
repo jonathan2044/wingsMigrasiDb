@@ -58,6 +58,58 @@ class DataSourceConfig:
 
 
 @dataclass
+class ColumnTransformRule:
+    """Aturan transformasi nilai kolom sebelum perbandingan.
+    Disimpan secara global di settings dan berlaku untuk setiap job
+    yang mengaktifkan opsi 'apply_global_transforms'.
+    """
+    column_name: str                            # nama kolom yang di-match (case-insensitive)
+    side: str                                   # "left" | "right" | "both"
+    transform_type: str                         # "prefix" | "suffix" | "lpad" | "rpad" | "strip_chars" | "replace" | "substring"
+    params: Dict[str, Any] = field(default_factory=dict)
+    enabled: bool = True
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "column_name": self.column_name,
+            "side": self.side,
+            "transform_type": self.transform_type,
+            "params": self.params,
+            "enabled": self.enabled,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ColumnTransformRule":
+        return cls(
+            column_name=d.get("column_name", ""),
+            side=d.get("side", "both"),
+            transform_type=d.get("transform_type", "prefix"),
+            params=d.get("params", {}),
+            enabled=bool(d.get("enabled", True)),
+        )
+
+    def describe_params(self) -> str:
+        """Ringkasan parameter yang mudah dibaca manusia."""
+        t = self.transform_type
+        p = self.params
+        if t == "prefix":
+            return f"'{p.get('text', '')}' di depan"
+        elif t == "suffix":
+            return f"'{p.get('text', '')}' di belakang"
+        elif t == "lpad":
+            return f"pad kiri pjg={p.get('length', '')} char='{p.get('pad_char', '0')}'"
+        elif t == "rpad":
+            return f"pad kanan pjg={p.get('length', '')} char='{p.get('pad_char', ' ')}'"
+        elif t == "strip_chars":
+            return f"hapus: '{p.get('chars', '')}'"
+        elif t == "replace":
+            return f"'{p.get('old', '')}' → '{p.get('new', '')}'"
+        elif t == "substring":
+            return f"mulai={p.get('start', 1)} pjg={p.get('length', '')}"
+        return str(p)
+
+
+@dataclass
 class CompareOptions:
     """Opsi normalisasi dan perbandingan data."""
     trim_whitespace: bool = True
@@ -67,6 +119,7 @@ class CompareOptions:
     normalize_number: bool = False
     date_format: str = "%Y-%m-%d"
     decimal_places: int = 2
+    apply_global_transforms: bool = True        # gunakan global column transform rules
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()

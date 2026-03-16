@@ -149,3 +149,22 @@ class AppSettings:
     @property
     def theme(self) -> str:
         return self.get("theme", "light")
+
+    # ------------------------------------------------------------------ transform rules
+
+    def get_transform_rules(self) -> list:
+        """Kembalikan daftar ColumnTransformRule yang tersimpan di settings."""
+        from models.compare_config import ColumnTransformRule
+        raw = self.get("column_transform_rules", [])
+        rules = []
+        for d in raw:
+            try:
+                rules.append(ColumnTransformRule.from_dict(d))
+            except Exception as e:
+                logger.warning("Gagal membaca transform rule: %s", e)
+        return rules
+
+    def save_transform_rules(self, rules: list) -> None:
+        """Simpan daftar ColumnTransformRule ke settings."""
+        self.set("column_transform_rules", [r.to_dict() for r in rules])
+        self.save()

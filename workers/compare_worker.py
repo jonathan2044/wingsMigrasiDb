@@ -137,12 +137,24 @@ class CompareWorker(QThread):
                 # Jalankan compare engine
                 self._emit_progress(STEP_COMPARE, 0, total_estimate)
 
+                # Load global transform rules dari settings jika diaktifkan
+                transform_rules = []
+                if self._config.options.apply_global_transforms:
+                    transform_rules = self._settings.get_transform_rules()
+                    if transform_rules:
+                        active = [r for r in transform_rules if r.enabled]
+                        self._log(
+                            f"Global transform rules: {len(active)} aktif dari "
+                            f"{len(transform_rules)} rule terdaftar."
+                        )
+
                 engine = CompareEngine(
                     conn=conn,
                     config=self._config,
                     progress_cb=lambda step, done, total: self._emit_progress(
                         step, done, total
                     ),
+                    transform_rules=transform_rules,
                 )
                 summary = engine.run()
 

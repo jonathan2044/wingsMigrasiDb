@@ -2270,8 +2270,9 @@ class _NormToggleRow(QWidget):
 
 
 class _Step4Options(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, settings=None, parent=None):
         super().__init__(parent)
+        self._settings = settings
         self._setup_ui()
 
     def _setup_ui(self):
@@ -2318,7 +2319,42 @@ class _Step4Options(QWidget):
             n_vl.addWidget(_Divider())
         vl.addWidget(norm_card)
 
-        # Job Summary card
+        # Global Transform Rules card
+        tr_card = _Card()
+        tr_vl = QVBoxLayout(tr_card)
+        tr_vl.setContentsMargins(20, 18, 20, 18)
+        tr_vl.setSpacing(0)
+        tr_hdr = QHBoxLayout()
+        tr_hdr.addWidget(QLabel("\U0001f504"))
+        tr_title = QLabel("Global Transformation Rules")
+        tr_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {COLOR_TEXT};")
+        tr_hdr.addWidget(tr_title)
+        tr_hdr.addStretch()
+        tr_vl.addLayout(tr_hdr)
+        tr_sub = QLabel(
+            "Terapkan aturan transformasi kolom global yang dikonfigurasi di Settings. "
+            "Contoh: prefix/suffix, zero-pad (LPAD), strip karakter, replace teks."
+        )
+        tr_sub.setWordWrap(True)
+        tr_sub.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
+        tr_vl.addWidget(tr_sub)
+        tr_vl.addSpacing(10)
+        self._opt_transforms = _NormToggleRow(
+            "Terapkan Global Transformation Rules",
+            "ON = rules dari Settings diterapkan pada kolom yang cocok namanya",
+            True,
+        )
+        tr_vl.addWidget(self._opt_transforms)
+        tr_vl.addWidget(_Divider())
+        self._transform_rules_summary = QLabel("")
+        self._transform_rules_summary.setWordWrap(True)
+        self._transform_rules_summary.setStyleSheet(
+            f"color: {COLOR_TEXT_MUTED}; font-size: 12px; padding: 4px 0;"
+        )
+        tr_vl.addWidget(self._transform_rules_summary)
+        vl.addWidget(tr_card)
+        self._refresh_transform_summary()
+
         sum_card = _Card()
         s_vl = QVBoxLayout(sum_card)
         s_vl.setContentsMargins(20, 18, 20, 18)
@@ -2380,7 +2416,29 @@ class _Step4Options(QWidget):
         if self._opt_null.is_checked(): active.append("Empty = null")
         if self._opt_date.is_checked(): active.append("Normalize date")
         if self._opt_num.is_checked():  active.append("Normalize number")
+        if self._opt_transforms.is_checked():
+            active.append("Global transforms")
         self._summary_rows[6][1].setText(", ".join(active) if active else "Tidak ada")
+
+    def _refresh_transform_summary(self):
+        """Tampilkan ringkasan global rules yang aktif."""
+        if self._settings is None:
+            self._transform_rules_summary.setText("(Settings tidak tersedia)")
+            return
+        try:
+            rules = self._settings.get_transform_rules()
+        except Exception:
+            rules = []
+        active = [r for r in rules if r.enabled]
+        if not rules:
+            txt = "Belum ada rule — konfigurasi di Settings > Transformasi Kolom"
+        elif not active:
+            txt = f"{len(rules)} rule terdaftar, semua nonaktif"
+        else:
+            names = ", ".join(f"{r.column_name} ({r.transform_type})" for r in active[:5])
+            suffix = f" +{len(active)-5} lainnya" if len(active) > 5 else ""
+            txt = f"{len(active)} rule aktif: {names}{suffix}"
+        self._transform_rules_summary.setText(txt)
 
     def get_options(self) -> CompareOptions:
         return CompareOptions(
@@ -2389,6 +2447,7 @@ class _Step4Options(QWidget):
             treat_empty_as_null=self._opt_null.is_checked(),
             normalize_date=self._opt_date.is_checked(),
             normalize_number=self._opt_num.is_checked(),
+            apply_global_transforms=self._opt_transforms.is_checked(),
         )
 
     def should_save_template(self) -> bool:
@@ -2458,7 +2517,7 @@ class NewJobPage(QWidget):
         self._step1 = _Step1SelectSource(self._template_manager)
         self._step2 = _Step2ImportFiles(self._connection_store)
         self._step3 = _Step3ColumnMapping()
-        self._step4 = _Step4Options()
+        self._step4 = _Step4Options(settings=self._settings)
 
         for w in [self._step1, self._step2, self._step3, self._step4]:
             self._step_stack.addWidget(w)
