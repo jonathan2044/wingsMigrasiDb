@@ -102,7 +102,15 @@ class CompareWorker(QThread):
                 import os as _os
                 _cpu = max(2, (_os.cpu_count() or 4))
                 conn.execute(f"PRAGMA threads={_cpu}")
-                conn.execute("PRAGMA memory_limit='2GB'")
+
+                # Memory limit: 70% dari RAM tersedia, minimal 2 GB, maksimal 16 GB
+                try:
+                    import psutil as _psutil
+                    _avail_mb = _psutil.virtual_memory().available // (1024 * 1024)
+                except Exception:
+                    _avail_mb = 4096  # default 4 GB jika psutil tidak tersedia
+                _mem_mb = max(2048, min(int(_avail_mb * 0.70), 16 * 1024))
+                conn.execute(f"PRAGMA memory_limit='{_mem_mb}MB'")
 
                 # Buat tabel hasil
                 for stmt in _RESULT_TABLE_DDL.strip().split(";"):
@@ -156,8 +164,9 @@ class CompareWorker(QThread):
                         active_ge = [r for r in group_expansion_rules if r.enabled]
                         if active_ge:
                             descs = ", ".join(
-                                f"{r.left_col}\u2192{r.right_col if r.right_col != r.left_col else '(sama)'}"
-                                f" ({r.total_mappings()} mapping)"
+                                f"{r.left_col}\u2192[{', '.join(r.right_cols[:2])}"
+                                f"{'...' if len(r.right_cols) > 2 else ''}]"
+                                f" ({r.total_mappings()} baris)"
                                 for r in active_ge[:3]
                             )
                             self._log(

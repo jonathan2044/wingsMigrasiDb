@@ -659,8 +659,53 @@ class CompareEngine:
             )
         mismatch_cond = " OR ".join(diff_checks) if diff_checks else "FALSE"
 
+        # ── Materialisasi intermediate tables untuk performa hash-join ──
+        # Menghindari correlated EXISTS yang dievaluasi ulang per baris.
+
+        try:
+            # _ge_mapped_left: left rows yang group-val-nya ADA di mapping
+            self._conn.execute("DROP TABLE IF EXISTS _ge_mapped_left")
+            self._conn.execute(f"""
+                CREATE TEMP TABLE _ge_mapped_left AS
+                SELECT DISTINCT nl.left_rownum
+                FROM normalized_left nl
+                INNER JOIN (SELECT DISTINCT left_val FROM _ge_expected) gev
+                    ON gev.left_val = nl."{left_gcol}"
+            """)
+        except Exception as e:
+            logger.error("[group_exp] GAGAL membuat _ge_mapped_left: %s", e)
+            raise
+
+        try:
+            # _ge_matched_left: left rows yang cocok dengan minimal 1 right row via ekspansi
+            self._conn.execute("DROP TABLE IF EXISTS _ge_matched_left")
+            self._conn.execute(f"""
+                CREATE TEMP TABLE _ge_matched_left AS
+                SELECT DISTINCT nl.left_rownum
+                FROM normalized_left nl
+                INNER JOIN _ge_expected ge ON ge.left_val = nl."{left_gcol}"
+                INNER JOIN normalized_right nr ON {key_join_nl_nr} AND {ge_right_match}
+            """)
+        except Exception as e:
+            logger.error("[group_exp] GAGAL membuat _ge_matched_left: %s", e)
+            raise
+
+        try:
+            # _ge_covered_right: right rows yang di-claim oleh minimal 1 left row via ekspansi
+            self._conn.execute("DROP TABLE IF EXISTS _ge_covered_right")
+            self._conn.execute(f"""
+                CREATE TEMP TABLE _ge_covered_right AS
+                SELECT DISTINCT nr.right_rownum
+                FROM normalized_right nr
+                INNER JOIN normalized_left nl2 ON {key_join_nl2_nr}
+                INNER JOIN _ge_expected ge2
+                    ON ge2.left_val = nl2."{left_gcol}" AND {ge_right_match2}
+            """)
+        except Exception as e:
+            logger.error("[group_exp] GAGAL membuat _ge_covered_right: %s", e)
+            raise
+
         # ── PART 1a: mapped left rows + minimal 1 kombinasi ditemukan di kanan → MATCH ──
-        # Any-match: cukup EXISTS 1 pasangan (expected_combo × right_row) yang cocok.
         sql_match = f"""
         INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
         SELECT
@@ -671,11 +716,7 @@ class CompareEngine:
             '{{}}',
             '[]'
         FROM normalized_left nl
-        WHERE EXISTS (
-            SELECT 1 FROM _ge_expected ge
-            INNER JOIN normalized_right nr ON {key_join_nl_nr} AND {ge_right_match}
-            WHERE ge.left_val = nl."{left_gcol}"
-        )
+        INNER JOIN _ge_matched_left gml ON gml.left_rownum = nl.left_rownum
         """
         logger.debug("[group_exp] Any-Match SQL:\n%s", sql_match)
         try:
@@ -695,12 +736,9 @@ class CompareEngine:
             '{{}}',
             '[]'
         FROM normalized_left nl
-        WHERE EXISTS (SELECT 1 FROM _ge_expected ge WHERE ge.left_val = nl."{left_gcol}")
-          AND NOT EXISTS (
-            SELECT 1 FROM _ge_expected ge
-            INNER JOIN normalized_right nr ON {key_join_nl_nr} AND {ge_right_match}
-            WHERE ge.left_val = nl."{left_gcol}"
-          )
+        INNER JOIN _ge_mapped_left gm ON gm.left_rownum = nl.left_rownum
+        LEFT  JOIN _ge_matched_left gml ON gml.left_rownum = nl.left_rownum
+        WHERE gml.left_rownum IS NULL
         """
         logger.debug("[group_exp] Missing Right (no match) SQL:\n%s", sql_mr)
         try:
@@ -723,7 +761,8 @@ class CompareEngine:
                 {diff_cols_expr}
             FROM normalized_left nl
             INNER JOIN normalized_right nr ON {key_join_nl_nr}
-            WHERE NOT EXISTS (SELECT 1 FROM _ge_expected ge  WHERE ge.left_val = nl."{left_gcol}")
+            LEFT  JOIN _ge_mapped_left gm ON gm.left_rownum = nl.left_rownum
+            WHERE gm.left_rownum IS NULL
               AND NOT EXISTS (SELECT 1 FROM _ge_expected ge2 WHERE {ge_right_match2})
             """
             try:
@@ -743,7 +782,8 @@ class CompareEngine:
                 '{{}}',
                 '[]'
             FROM normalized_left nl
-            WHERE NOT EXISTS (SELECT 1 FROM _ge_expected ge WHERE ge.left_val = nl."{left_gcol}")
+            LEFT  JOIN _ge_mapped_left gm ON gm.left_rownum = nl.left_rownum
+            WHERE gm.left_rownum IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM normalized_right nr_inner
                 WHERE {key_join_nl_nri}
@@ -767,11 +807,8 @@ class CompareEngine:
             {right_data_json2},
             '[]'
         FROM normalized_right nr
-        WHERE NOT EXISTS (
-            SELECT 1 FROM normalized_left nl2
-            INNER JOIN _ge_expected ge2 ON nl2."{left_gcol}" = ge2.left_val
-            WHERE {key_join_nl2_nr} AND {ge_right_match2}
-        )
+        LEFT  JOIN _ge_covered_right gcr ON gcr.right_rownum = nr.right_rownum
+        WHERE gcr.right_rownum IS NULL
         AND NOT EXISTS (
             SELECT 1 FROM normalized_left nl3
             WHERE {key_join_nl3_nr}

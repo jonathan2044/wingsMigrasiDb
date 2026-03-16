@@ -256,7 +256,82 @@ class CSVReader:
         chunk_size: int = 10_000,
         progress_callback=None,
     ) -> int:
-        """Import CSV ke tabel DuckDB. Returns jumlah baris."""
+        """Import CSV ke tabel DuckDB.  Returns jumlah baris.
+
+        Path cepat: DuckDB native read_csv (jauh lebih cepat dari pandas chunkloop).
+        Jika gagal karena encoding/format, jatuh-balik ke pandas chunk loop.
+        """
+        try:
+            return self._import_to_duckdb_native(conn, table_name, progress_callback)
+        except Exception as e:
+            logger.warning(
+                "DuckDB native CSV reader gagal (%s), beralih ke pandas chunked import.", e
+            )
+            return self._import_to_duckdb_pandas(conn, table_name, chunk_size, progress_callback)
+
+    def _import_to_duckdb_native(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        table_name: str,
+        progress_callback=None,
+    ) -> int:
+        """Import CSV via DuckDB built-in reader — 10-50× lebih cepat dari pandas."""
+        import re as _re
+
+        safe_path = str(self._path.resolve()).replace("'", "''")
+
+        # Tentukan encoding yang didukung DuckDB
+        enc = self._encoding.lower().replace("-", "")
+        if enc in ("utf8", "utf"):
+            duckdb_enc = "utf-8"
+        elif enc in ("latin1", "iso88591", "cp1252"):
+            duckdb_enc = "latin-1"
+        else:
+            duckdb_enc = self._encoding  # serahkan ke DuckDB, jatuh-balik jika tidak didukung
+
+        sep = self._sep
+        # DuckDB tidak mendukung sep multi-karakter; pastikan 1 karakter
+        if len(sep) != 1:
+            raise ValueError(f"Separator harus 1 karakter, dapat: {sep!r}")
+
+        conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+        conn.execute(
+            f"CREATE TABLE {table_name} AS "
+            f"SELECT * FROM read_csv("
+            f"  '{safe_path}', "
+            f"  sep='{sep.replace(chr(39), chr(39)+chr(39))}', "
+            f"  encoding='{duckdb_enc}', "
+            f"  all_varchar=true, "
+            f"  header=true, "
+            f"  auto_detect=false"
+            f")"
+        )
+
+        # Sanitasi nama kolom (rename kolom yang membutuhkan sanitasi)
+        col_info = conn.execute(f"DESCRIBE {table_name}").fetchall()
+        raw_names = [row[0] for row in col_info]
+        for raw in raw_names:
+            san = _sanitize_col(raw)
+            if san != raw:
+                safe_raw = raw.replace('"', '""')
+                safe_san = san.replace('"', '""')
+                conn.execute(f'ALTER TABLE {table_name} RENAME COLUMN "{safe_raw}" TO "{safe_san}"')
+
+        total_rows = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+        if progress_callback:
+            progress_callback(total_rows)
+
+        logger.info("Impor CSV (native) selesai: %d baris ke %s", total_rows, table_name)
+        return total_rows
+
+    def _import_to_duckdb_pandas(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        table_name: str,
+        chunk_size: int = 10_000,
+        progress_callback=None,
+    ) -> int:
+        """Import CSV via pandas chunksize loop (fallback path)."""
         total_rows = 0
         first_chunk = True
 
@@ -286,7 +361,7 @@ class CSVReader:
             conn.execute(f"CREATE TABLE {table_name} ({cols_def})")
             logger.warning("File CSV tidak memiliki data: %s", self._path)
 
-        logger.info("Impor CSV selesai: %d baris ke %s", total_rows, table_name)
+        logger.info("Impor CSV (pandas) selesai: %d baris ke %s", total_rows, table_name)
         return total_rows
 
 
