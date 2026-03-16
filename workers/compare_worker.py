@@ -98,6 +98,12 @@ class CompareWorker(QThread):
             conn = duckdb.connect(job_db_path)
 
             try:
+                # Optimalkan DuckDB untuk dataset besar
+                import os as _os
+                _cpu = max(2, (_os.cpu_count() or 4))
+                conn.execute(f"PRAGMA threads={_cpu}")
+                conn.execute("PRAGMA memory_limit='2GB'")
+
                 # Buat tabel hasil
                 for stmt in _RESULT_TABLE_DDL.strip().split(";"):
                     stmt = stmt.strip()

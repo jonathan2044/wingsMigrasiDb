@@ -248,7 +248,7 @@ class PostgresConnector:
                         rows = cursor.fetchmany(chunk_size)
                         if not rows:
                             break
-                        yield pd.DataFrame(rows).astype(str)
+                        yield pd.DataFrame(rows, dtype=str)
             finally:
                 raw_conn.close()
         except PostgresConnectionError:

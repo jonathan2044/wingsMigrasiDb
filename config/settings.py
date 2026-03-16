@@ -144,7 +144,7 @@ class AppSettings:
 
     @property
     def import_chunk_size(self) -> int:
-        return int(self.get("import_chunk_size", 10_000))
+        return int(self.get("import_chunk_size", 50_000))
 
     @property
     def theme(self) -> str:

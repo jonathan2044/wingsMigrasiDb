@@ -267,7 +267,7 @@ class MySQLConnector:
                         rows = cursor.fetchmany(chunk_size)
                         if not rows:
                             break
-                        yield pd.DataFrame(rows, columns=col_names).astype(str)
+                        yield pd.DataFrame(rows, columns=col_names, dtype=str)
             finally:
                 raw_conn.close()
         except MySQLConnectionError:
