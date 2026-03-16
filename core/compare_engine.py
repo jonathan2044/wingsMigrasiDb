@@ -95,7 +95,7 @@ class CompareEngine:
                     f"SELECT {key_exprs_dup} FROM normalized_left WHERE 1=0"
                 )
                 logger.info("[run] Mode group expansion aktif: %s \u2192 %s",
-                            active_exp_rule.left_col, active_exp_rule.right_col)
+                            active_exp_rule.left_col, active_exp_rule.right_cols)
             else:
                 self._build_dup_keys_table()
                 self._find_duplicate_keys()
@@ -133,9 +133,10 @@ class CompareEngine:
             if _exp.left_col not in left_cols and _exp.left_col not in keys:
                 left_cols = list(left_cols) + [_exp.left_col]
                 logger.info("[views] kolom group expansion '%s' ditambahkan ke normalized_left", _exp.left_col)
-            if _exp.right_col not in right_cols:
-                right_cols = list(right_cols) + [_exp.right_col]
-                logger.info("[views] kolom group expansion '%s' ditambahkan ke normalized_right", _exp.right_col)
+            for _rc in _exp.right_cols:
+                if _rc not in right_cols:
+                    right_cols = list(right_cols) + [_rc]
+                    logger.info("[views] kolom group expansion '%s' ditambahkan ke normalized_right", _rc)
 
         left_total  = self._conn.execute("SELECT COUNT(*) FROM src_left").fetchone()[0]
         right_total = self._conn.execute("SELECT COUNT(*) FROM src_right").fetchone()[0]
@@ -537,13 +538,11 @@ class CompareEngine:
         if not self._group_expansion_rules:
             return None
         compare_left   = {cm.left_col.lower()  for cm in self._config.compare_columns}
-        compare_right  = {cm.right_col.lower() for cm in self._config.compare_columns}
         key_cols_lower = {m.left_col.lower()   for m in  self._config.key_columns}
         for rule in self._group_expansion_rules:
-            if not rule.enabled or not rule.mapping:
+            if not rule.enabled or not rule.mapping or not rule.right_cols:
                 continue
             lc = rule.left_col.lower()
-            rc = rule.right_col.lower()
             if lc in key_cols_lower:
                 logger.warning(
                     "[group_exp] Kolom '%s' adalah key column — tidak bisa jadi expansion column. Rule dilewati.",
@@ -557,12 +556,14 @@ class CompareEngine:
 
     def _compare_data_with_group_expansion(self, rule: GroupExpansionRule):
         """
-        Perbandingan mode 1-to-many group expansion.
+        Perbandingan mode 1-to-many group expansion (row + column expansion).
 
-        - Left rows dengan group val ADA di mapping  → expand ke N expected right rows
-          (each expected right row → MATCH / MISMATCH / MISSING_RIGHT)
-        - Left rows dengan group val TIDAK di mapping → fallback 1-to-1 + warning (Q5)
-        - Right rows yang tidak ter-cover oleh mapping manapun → MISSING_LEFT (Q6)
+        Setiap left row dengan group val ADA di mapping di-expand ke beberapa right rows,
+        di mana setiap right row memiliki beberapa kolom (right_cols).
+
+        - Left val ADA di mapping  → INNER JOIN tiap expected right row → MATCH/MISMATCH/MISSING_RIGHT
+        - Left val TIDAK di mapping → fallback 1-to-1 + warning (Q5)
+        - Right rows tidak ter-cover oleh expansion maupun fallback → MISSING_LEFT (Q6)
         """
         if self._config.use_row_order:
             logger.warning("[group_exp] Urutan-baris mode tidak mendukung group expansion. Jalankan normal.")
@@ -574,27 +575,37 @@ class CompareEngine:
             raise ValueError("Group expansion membutuhkan minimal 1 Key Column.")
 
         compare_cols = self._config.compare_columns
-        left_gcol  = f"left_{rule.left_col}"
-        right_gcol = f"right_{rule.right_col}"
+        left_gcol = f"left_{rule.left_col}"
+        n_rc = len(rule.right_cols)
 
-        # --- Muat mapping ke temp table ---
-        self._conn.execute("DROP TABLE IF EXISTS _group_map")
-        self._conn.execute("CREATE TEMP TABLE _group_map (left_val VARCHAR, right_val VARCHAR)")
-        rows_ins = [
-            (str(lv), str(rv))
-            for lv, rvs in rule.mapping.items()
-            for rv in rvs
-        ]
+        if n_rc == 0:
+            logger.error("[group_exp] right_cols kosong — fallback ke perbandingan 1-to-1.")
+            self._compare_data()
+            return
+
+        # --- Buat temp table _ge_expected dengan skema dinamis ---
+        self._conn.execute("DROP TABLE IF EXISTS _ge_expected")
+        col_defs = ", ".join(f'"rc_{i}" VARCHAR' for i in range(n_rc))
+        self._conn.execute(f'CREATE TEMP TABLE _ge_expected (left_val VARCHAR, {col_defs})')
+
+        rows_ins = []
+        for lv, rows_list in rule.mapping.items():
+            for row_vals in rows_list:
+                padded = list(row_vals)[:n_rc]
+                padded += [''] * max(0, n_rc - len(padded))
+                rows_ins.append([str(lv)] + [str(v) for v in padded])
         if rows_ins:
-            self._conn.executemany("INSERT INTO _group_map VALUES (?, ?)", rows_ins)
-        n_map = self._conn.execute("SELECT COUNT(*) FROM _group_map").fetchone()[0]
-        logger.info("[group_exp] Mapping dimuat: %d entri  (%s \u2192 %s)", n_map, rule.left_col, rule.right_col)
+            ph = ", ".join(["?"] * (n_rc + 1))
+            self._conn.executemany(f"INSERT INTO _ge_expected VALUES ({ph})", rows_ins)
+        n_map = self._conn.execute("SELECT COUNT(*) FROM _ge_expected").fetchone()[0]
+        logger.info("[group_exp] Expected rows dimuat: %d  (left_col=%s, right_cols=%s)",
+                    n_map, rule.left_col, rule.right_cols)
 
-        # --- Cek left values tidak ada di mapping (Q5) ---
+        # --- Cek nilai kiri tidak ada di mapping (Q5) ---
         try:
             unmapped_rows = self._conn.execute(
                 f'SELECT DISTINCT nl."{left_gcol}" FROM normalized_left nl '
-                f'WHERE NOT EXISTS (SELECT 1 FROM _group_map gm WHERE gm.left_val = nl."{left_gcol}")'
+                f'WHERE NOT EXISTS (SELECT 1 FROM _ge_expected ge WHERE ge.left_val = nl."{left_gcol}")'
             ).fetchall()
         except Exception as e:
             logger.warning("[group_exp] Cek unmapped gagal: %s", e)
@@ -604,28 +615,33 @@ class CompareEngine:
         if has_unmapped:
             vals_list = [str(r[0]) for r in unmapped_rows[:20]]
             logger.warning(
-                "[group_exp] PERINGATAN: %d nilai kolom '%s' di sisi kiri tidak ada di mapping "
-                "(Group Expansion aktif tapi tidak ada mapping untuk nilai ini). "
-                "Baris akan di-fallback ke perbandingan 1-to-1. "
-                "Periksa konfigurasi Group Expansion di Settings jika ini tidak diharapkan. "
+                "[group_exp] %d nilai kolom '%s' di kiri tidak ada di mapping → fallback 1-to-1. "
                 "Nilai (maks 20): %s",
                 len(unmapped_rows), rule.left_col, vals_list,
             )
 
         # --- SQL helper expressions ---
-        key_join_nl_nr  = " AND ".join(f'nl."key_{k}" = nr."key_{k}"'  for k in keys)
-        key_join_nl2_nr = " AND ".join(f'nl2."key_{k}" = nr."key_{k}"' for k in keys)
-        key_join_nl3_nr = " AND ".join(f'nl3."key_{k}" = nr."key_{k}"' for k in keys)
-        key_join_nl_nri = " AND ".join(f'nl."key_{k}" = nr_inner."key_{k}"' for k in keys)
+        key_join_nl_nr  = " AND ".join(f'nl."key_{k}" = nr."key_{k}"'        for k in keys)
+        key_join_nl2_nr = " AND ".join(f'nl2."key_{k}" = nr."key_{k}"'       for k in keys)
+        key_join_nl3_nr = " AND ".join(f'nl3."key_{k}" = nr."key_{k}"'       for k in keys)
+        key_join_nl_nri = " AND ".join(f'nl."key_{k}" = nr_inner."key_{k}"'  for k in keys)
 
-        key_json_nl  = self._build_key_json("nl", keys)
-        key_json_nr  = self._build_key_json("nr", keys)
+        # JOIN condition: right row's columns must match expected values
+        ge_right_match    = " AND ".join(f'nr."right_{rule.right_cols[i]}" = ge."rc_{i}"'      for i in range(n_rc))
+        ge_right_match2   = " AND ".join(f'nr."right_{rule.right_cols[i]}" = ge2."rc_{i}"'     for i in range(n_rc))
+        ge_right_match_ml = " AND ".join(f'nr."right_{rule.right_cols[i]}" = ge_ml."rc_{i}"'   for i in range(n_rc))
+        ge_right_match_in = " AND ".join(f'nr_inner."right_{rule.right_cols[i]}" = ge_in."rc_{i}"' for i in range(n_rc))
+
+        key_json_nl = self._build_key_json("nl", keys)
+        key_json_nr = self._build_key_json("nr", keys)
 
         # Kolom group expansion dikecualikan dari diff check (perbedaannya by-design)
+        ge_left_set  = {rule.left_col.lower()}
+        ge_right_set = {rc.lower() for rc in rule.right_cols}
         compare_cols_diff = [
             cm for cm in compare_cols
-            if not (cm.left_col.lower() == rule.left_col.lower()
-                    and cm.right_col.lower() == rule.right_col.lower())
+            if cm.left_col.lower() not in ge_left_set
+            and cm.right_col.lower() not in ge_right_set
         ]
         left_data_json   = self._build_row_json("nl", [f"left_{cm.left_col}"   for cm in compare_cols])
         right_data_json  = self._build_row_json("nr", [f"right_{cm.right_col}" for cm in compare_cols])
@@ -641,7 +657,7 @@ class CompareEngine:
             )
         mismatch_cond = " OR ".join(diff_checks) if diff_checks else "FALSE"
 
-        # ── PART 1a: mapped left rows + right ditemukan → MATCH / MISMATCH ──
+        # ── PART 1a: mapped left rows + right row ditemukan → MATCH / MISMATCH ──
         sql_match = f"""
         INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
         SELECT
@@ -652,9 +668,8 @@ class CompareEngine:
             {right_data_json},
             {diff_cols_expr}
         FROM normalized_left nl
-        INNER JOIN _group_map gm ON nl."{left_gcol}" = gm.left_val
-        INNER JOIN normalized_right nr
-            ON {key_join_nl_nr} AND nr."{right_gcol}" = gm.right_val
+        INNER JOIN _ge_expected ge ON nl."{left_gcol}" = ge.left_val
+        INNER JOIN normalized_right nr ON {key_join_nl_nr} AND {ge_right_match}
         """
         logger.debug("[group_exp] Match/Mismatch SQL:\n%s", sql_match)
         try:
@@ -663,7 +678,7 @@ class CompareEngine:
             logger.error("[group_exp] GAGAL Match/Mismatch: %s\nSQL: %s", e, sql_match)
             raise
 
-        # ── PART 1b: mapped left rows + right TIDAK ditemukan → MISSING_RIGHT ──
+        # ── PART 1b: mapped left rows + right row TIDAK ditemukan → MISSING_RIGHT ──
         sql_mr = f"""
         INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
         SELECT
@@ -674,9 +689,8 @@ class CompareEngine:
             '{{}}',
             '[]'
         FROM normalized_left nl
-        INNER JOIN _group_map gm ON nl."{left_gcol}" = gm.left_val
-        LEFT JOIN normalized_right nr
-            ON {key_join_nl_nr} AND nr."{right_gcol}" = gm.right_val
+        INNER JOIN _ge_expected ge ON nl."{left_gcol}" = ge.left_val
+        LEFT JOIN normalized_right nr ON {key_join_nl_nr} AND {ge_right_match}
         WHERE nr."key_{keys[0]}" IS NULL
         """
         logger.debug("[group_exp] Missing Right (mapped) SQL:\n%s", sql_mr)
@@ -688,7 +702,7 @@ class CompareEngine:
 
         # ── PART 2: unmapped left rows → fallback 1-to-1 ──
         if has_unmapped:
-            # 2a: Match/Mismatch (unmapped left × right yg juga tidak ada di mapping)
+            # 2a: Match/Mismatch (unmapped left × right yg juga tidak ter-cover ekspansi)
             sql_ump_match = f"""
             INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
             SELECT
@@ -700,8 +714,8 @@ class CompareEngine:
                 {diff_cols_expr}
             FROM normalized_left nl
             INNER JOIN normalized_right nr ON {key_join_nl_nr}
-            WHERE NOT EXISTS (SELECT 1 FROM _group_map gm  WHERE gm.left_val  = nl."{left_gcol}")
-              AND NOT EXISTS (SELECT 1 FROM _group_map gm2 WHERE gm2.right_val = nr."{right_gcol}")
+            WHERE NOT EXISTS (SELECT 1 FROM _ge_expected ge  WHERE ge.left_val = nl."{left_gcol}")
+              AND NOT EXISTS (SELECT 1 FROM _ge_expected ge2 WHERE {ge_right_match2})
             """
             try:
                 self._conn.execute(sql_ump_match)
@@ -709,7 +723,7 @@ class CompareEngine:
                 logger.error("[group_exp] GAGAL Unmapped Match: %s", e)
                 raise
 
-            # 2b: Missing Right (unmapped left, tidak ada right yg unclaimed untuk key ini)
+            # 2b: Missing Right (unmapped left, tidak ada right unclaimed untuk key ini)
             sql_ump_mr = f"""
             INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
             SELECT
@@ -720,11 +734,11 @@ class CompareEngine:
                 '{{}}',
                 '[]'
             FROM normalized_left nl
-            WHERE NOT EXISTS (SELECT 1 FROM _group_map gm WHERE gm.left_val = nl."{left_gcol}")
+            WHERE NOT EXISTS (SELECT 1 FROM _ge_expected ge WHERE ge.left_val = nl."{left_gcol}")
               AND NOT EXISTS (
                 SELECT 1 FROM normalized_right nr_inner
                 WHERE {key_join_nl_nri}
-                  AND NOT EXISTS (SELECT 1 FROM _group_map gm2 WHERE gm2.right_val = nr_inner."{right_gcol}")
+                  AND NOT EXISTS (SELECT 1 FROM _ge_expected ge_in WHERE {ge_right_match_in})
               )
             """
             try:
@@ -733,7 +747,7 @@ class CompareEngine:
                 logger.error("[group_exp] GAGAL Unmapped Missing Right: %s", e)
                 raise
 
-        # ── PART 3: MISSING_LEFT (right rows tidak di-cover oleh expansion maupun fallback) ──
+        # ── PART 3: MISSING_LEFT — right rows tidak ter-cover ekspansi maupun fallback ──
         sql_ml = f"""
         INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
         SELECT
@@ -745,18 +759,15 @@ class CompareEngine:
             '[]'
         FROM normalized_right nr
         WHERE NOT EXISTS (
-            SELECT 1
-            FROM normalized_left nl2
-            INNER JOIN _group_map gm2 ON nl2."{left_gcol}" = gm2.left_val
-            WHERE {key_join_nl2_nr}
-              AND gm2.right_val = nr."{right_gcol}"
+            SELECT 1 FROM normalized_left nl2
+            INNER JOIN _ge_expected ge2 ON nl2."{left_gcol}" = ge2.left_val
+            WHERE {key_join_nl2_nr} AND {ge_right_match2}
         )
         AND NOT EXISTS (
-            SELECT 1
-            FROM normalized_left nl3
+            SELECT 1 FROM normalized_left nl3
             WHERE {key_join_nl3_nr}
-              AND NOT EXISTS (SELECT 1 FROM _group_map gm3 WHERE gm3.left_val  = nl3."{left_gcol}")
-              AND NOT EXISTS (SELECT 1 FROM _group_map gm4 WHERE gm4.right_val = nr."{right_gcol}")
+              AND NOT EXISTS (SELECT 1 FROM _ge_expected ge3 WHERE ge3.left_val = nl3."{left_gcol}")
+              AND NOT EXISTS (SELECT 1 FROM _ge_expected ge_ml WHERE {ge_right_match_ml})
         )
         """
         logger.debug("[group_exp] Missing Left SQL:\n%s", sql_ml)

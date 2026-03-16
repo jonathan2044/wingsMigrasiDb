@@ -1,0 +1,13 @@
+{
+  "column_transform_rules": [
+    {
+      "column_name": "sls_code",
+      "side": "left",
+      "transform_type": "prefix",
+      "params": {
+        "text": "S0"
+      },
+      "enabled": true
+    }
+  ]
+}

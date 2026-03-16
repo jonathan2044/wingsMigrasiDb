@@ -2494,7 +2494,7 @@ class _Step4Options(QWidget):
             txt = f"{len(rules)} rule terdaftar, semua nonaktif"
         else:
             parts = [
-                f"{r.left_col} \u2192 {r.right_col if r.right_col != r.left_col else '(sama)'} ({r.total_mappings()} mapping)"
+                f"{r.left_col} \u2192 [{', '.join(r.right_cols[:2])}{'...' if len(r.right_cols) > 2 else ''}] ({r.total_mappings()} baris)"
                 for r in active[:3]
             ]
             suffix = f" +{len(active)-3} lainnya" if len(active) > 3 else ""

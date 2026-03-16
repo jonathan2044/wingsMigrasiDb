@@ -111,61 +111,68 @@ class ColumnTransformRule:
 
 @dataclass
 class GroupExpansionRule:
-    """Aturan ekspansi 1-to-many untuk kolom group.
+    """Aturan ekspansi 1-to-many untuk kolom group (row + column expansion).
     Disimpan secara global di settings dan berlaku untuk setiap job
     yang mengaktifkan opsi 'apply_group_expansion'.
 
-    Contoh: nilai 'AA' di sisi kiri (cust_group) di-expand ke tiga baris
-    di sisi kanan (group_code: 2A0, A21, A2).
+    Contoh: value 'AA' di sisi kiri (cust_group) di-expand ke beberapa baris kanan,
+    di mana setiap baris kanan memiliki beberapa kolom (cust_group, cust_group1, cust_group2).
 
     Q5: Jika left value TIDAK ada di mapping → fallback 1-to-1 + warning di log.
     Q6: Baris kanan tidak ter-cover mapping → dilaporkan MISSING_LEFT.
-    Q7: Satu rule = satu kolom group (satu per konfigurasi global).
+    Q7: Satu rule = satu kolom group kiri → N kolom kanan × M baris kanan.
     """
-    left_col: str = ""                              # nama kolom di sisi kiri
-    right_col: str = ""                             # nama kolom di sisi kanan (boleh beda)
-    mapping: Dict[str, List[str]] = field(default_factory=dict)  # {left_val: [rv1, rv2, ...]}
+    left_col: str = ""                                   # nama kolom di sisi kiri
+    right_cols: List[str] = field(default_factory=list)  # nama kolom-kolom di sisi kanan
+    mapping: Dict[str, List[List[str]]] = field(default_factory=dict)  # {left_val: [[row1_vals...], ...]}
     enabled: bool = True
-
-    def __post_init__(self):
-        if not self.right_col:
-            self.right_col = self.left_col
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "left_col": self.left_col,
-            "right_col": self.right_col,
+            "right_cols": self.right_cols,
             "mapping": self.mapping,
             "enabled": self.enabled,
         }
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "GroupExpansionRule":
-        left_col  = d.get("left_col", "")
-        right_col = d.get("right_col", "") or left_col
-        raw_map   = d.get("mapping", {})
-        mapping: Dict[str, List[str]] = {}
+        left_col = d.get("left_col", "")
+        # Backward compat: format lama memakai "right_col" (string tunggal)
+        if "right_cols" in d:
+            right_cols = [str(c) for c in d.get("right_cols", [])]
+        elif d.get("right_col"):
+            right_cols = [str(d["right_col"])]
+        else:
+            right_cols = [left_col] if left_col else []
+        raw_map = d.get("mapping", {})
+        mapping: Dict[str, List[List[str]]] = {}
         for k, v in raw_map.items():
-            if isinstance(v, list):
-                mapping[str(k)] = [str(x) for x in v]
+            if isinstance(v, list) and v and isinstance(v[0], list):
+                # Format baru: list of lists
+                mapping[str(k)] = [[str(x) for x in row] for row in v]
+            elif isinstance(v, list):
+                # Format lama: flat list → setiap elemen = satu baris kanan (1 kolom)
+                mapping[str(k)] = [[str(x)] for x in v]
             else:
-                mapping[str(k)] = [str(v)]
+                mapping[str(k)] = [[str(v)]]
         return cls(
             left_col=left_col,
-            right_col=right_col,
+            right_cols=right_cols,
             mapping=mapping,
             enabled=bool(d.get("enabled", True)),
         )
 
     def total_mappings(self) -> int:
-        """Total entri sisi kanan dari semua nilai kiri."""
-        return sum(len(v) for v in self.mapping.values())
+        """Total baris kanan dari semua nilai kiri."""
+        return sum(len(rows) for rows in self.mapping.values())
 
     def describe(self) -> str:
-        n_left  = len(self.mapping)
-        n_right = self.total_mappings()
-        rc = self.right_col if self.right_col != self.left_col else "(sama)"
-        return f"{self.left_col} \u2192 {rc}  ({n_left} kiri, {n_right} kanan)"
+        n_left = len(self.mapping)
+        n_right_rows = self.total_mappings()
+        n_cols = len(self.right_cols)
+        cols_str = ", ".join(self.right_cols[:3]) + ("..." if n_cols > 3 else "")
+        return f"{self.left_col} \u2192 [{cols_str}]  ({n_left} kiri, {n_right_rows} baris kanan)"
 
 
 @dataclass
