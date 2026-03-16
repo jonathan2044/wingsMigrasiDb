@@ -15,10 +15,11 @@ from typing import Dict, Any, Optional
 
 @dataclass
 class ConnectionProfile:
-    """Profil koneksi ke database PostgreSQL."""
+    """Profil koneksi ke database (PostgreSQL atau MySQL)."""
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     name: str = ""
+    db_type: str = "postgresql"   # "postgresql" | "mysql"
     host: str = "localhost"
     port: int = 5432
     database: str = ""
@@ -52,6 +53,7 @@ class ConnectionProfile:
         return {
             "id": self.id,
             "name": self.name,
+            "db_type": self.db_type,
             "host": self.host,
             "port": self.port,
             "database": self.database,
@@ -73,6 +75,7 @@ class ConnectionProfile:
         return cls(
             id=data["id"],
             name=data.get("name", ""),
+            db_type=data.get("db_type", "postgresql"),
             host=data.get("host", "localhost"),
             port=int(data.get("port", 5432)),
             database=data.get("database", ""),

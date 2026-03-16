@@ -31,10 +31,11 @@ class ConnectionStore:
         if existing is None:
             self._storage.execute(
                 """INSERT INTO connection_profiles
-                   (id, name, host, port, database, username, password, ssl_mode, created_at,
+                   (id, name, db_type, host, port, database, username, password, ssl_mode, created_at,
                     use_ssh_tunnel, ssh_host, ssh_port, ssh_user, ssh_auth_method, ssh_password, ssh_key_path)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                [d["id"], d["name"], d["host"], d["port"], d["database"],
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [d["id"], d["name"], d.get("db_type", "postgresql"),
+                 d["host"], d["port"], d["database"],
                  d["username"], d["password"], d["ssl_mode"], d["created_at"],
                  d["use_ssh_tunnel"], d["ssh_host"], d["ssh_port"], d["ssh_user"],
                  d["ssh_auth_method"], d["ssh_password"], d["ssh_key_path"]],
@@ -42,11 +43,12 @@ class ConnectionStore:
         else:
             self._storage.execute(
                 """UPDATE connection_profiles
-                   SET name=?, host=?, port=?, database=?, username=?, password=?, ssl_mode=?,
+                   SET name=?, db_type=?, host=?, port=?, database=?, username=?, password=?, ssl_mode=?,
                        use_ssh_tunnel=?, ssh_host=?, ssh_port=?, ssh_user=?,
                        ssh_auth_method=?, ssh_password=?, ssh_key_path=?
                    WHERE id=?""",
-                [d["name"], d["host"], d["port"], d["database"],
+                [d["name"], d.get("db_type", "postgresql"),
+                 d["host"], d["port"], d["database"],
                  d["username"], d["password"], d["ssl_mode"],
                  d["use_ssh_tunnel"], d["ssh_host"], d["ssh_port"], d["ssh_user"],
                  d["ssh_auth_method"], d["ssh_password"], d["ssh_key_path"], d["id"]],
@@ -74,12 +76,13 @@ class ConnectionStore:
     # ------------------------------------------------------------------ helper
 
     def _row_to_profile(self, row) -> ConnectionProfile:
-        keys = ["id", "name", "host", "port", "database",
+        keys = ["id", "name", "db_type", "host", "port", "database",
                 "username", "password", "ssl_mode", "created_at",
                 "use_ssh_tunnel", "ssh_host", "ssh_port", "ssh_user",
                 "ssh_auth_method", "ssh_password", "ssh_key_path"]
+        # row may have fewer or more columns depending on DB version
         d = dict(zip(keys, row))
-        # Older rows from DB may have fewer columns — fill defaults
+        d.setdefault("db_type", "postgresql")
         d.setdefault("use_ssh_tunnel", False)
         d.setdefault("ssh_host", "")
         d.setdefault("ssh_port", 22)

@@ -14,6 +14,9 @@ psycopg2-binary>=2.9.9
 SQLAlchemy>=2.0.0
 sshtunnel>=0.4.0
 
+# MySQL connector
+PyMySQL>=1.1.0
+
 # Export
 XlsxWriter>=3.1.9
 

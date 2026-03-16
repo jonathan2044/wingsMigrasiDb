@@ -144,7 +144,14 @@ a = Analysis(
         'sqlalchemy',
         'sqlalchemy.dialects.postgresql',
         'sqlalchemy.dialects.postgresql.psycopg2',
+        'sqlalchemy.dialects.mysql',
+        'sqlalchemy.dialects.mysql.pymysql',
         'sqlalchemy.pool',
+        # ── PyMySQL (MySQL connector) ──
+        'pymysql',
+        'pymysql.connections',
+        'pymysql.cursors',
+        'pymysql.converters',
         # ── XlsxWriter ──
         'xlsxwriter',
         # ── App modules ──
@@ -165,6 +172,7 @@ a = Analysis(
         'services',
         'services.file_reader',
         'services.postgres_connector',
+        'services.mysql_connector',
         'core',
         'core.normalization_engine',
         'core.compare_engine',

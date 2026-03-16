@@ -22,7 +22,7 @@ from config.constants import (
     JOB_STATUS_PROCESSING, JOB_STATUS_COMPLETED, JOB_STATUS_FAILED,
     STEP_INIT, STEP_IMPORT_LEFT, STEP_IMPORT_RIGHT,
     STEP_NORMALIZE, STEP_COMPARE, STEP_SAVE_RESULT, STEP_DONE,
-    JOB_TYPE_FILE_VS_FILE, JOB_TYPE_FILE_VS_PG,
+    JOB_TYPE_FILE_VS_FILE, JOB_TYPE_FILE_VS_PG, JOB_TYPE_DB_VS_DB,
 )
 from models.job import CompareJob
 from models.compare_config import CompareConfig, DataSourceConfig
@@ -104,21 +104,24 @@ class CompareWorker(QThread):
                     if stmt:
                         conn.execute(stmt)
 
-                # Import data kiri
-                self._emit_progress(STEP_IMPORT_LEFT, 0, 0)
-                left_rows = self._import_source(
-                    conn, "src_left", self._config.left_source, "kiri"
-                )
-                if self._cancelled:
-                    raise InterruptedError("Proses dibatalkan oleh user.")
+                # Import data kiri dan kanan
+                if self._job.job_type == JOB_TYPE_DB_VS_DB:
+                    # DB vs DB: import paralel kedua sumber
+                    left_rows, right_rows = self._import_db_vs_db_parallel(conn)
+                else:
+                    self._emit_progress(STEP_IMPORT_LEFT, 0, 0)
+                    left_rows = self._import_source(
+                        conn, "src_left", self._config.left_source, "kiri"
+                    )
+                    if self._cancelled:
+                        raise InterruptedError("Proses dibatalkan oleh user.")
 
-                # Import data kanan
-                self._emit_progress(STEP_IMPORT_RIGHT, left_rows, 0)
-                right_rows = self._import_source(
-                    conn, "src_right", self._config.right_source, "kanan"
-                )
-                if self._cancelled:
-                    raise InterruptedError("Proses dibatalkan oleh user.")
+                    self._emit_progress(STEP_IMPORT_RIGHT, left_rows, 0)
+                    right_rows = self._import_source(
+                        conn, "src_right", self._config.right_source, "kanan"
+                    )
+                    if self._cancelled:
+                        raise InterruptedError("Proses dibatalkan oleh user.")
 
                 total_estimate = left_rows + right_rows
                 self._log(
@@ -230,28 +233,18 @@ class CompareWorker(QThread):
                 progress_callback=_progress,
             )
 
-        elif source.source_type == "postgres":
-            from storage.connection_store import ConnectionStore
-            from storage.duckdb_storage import DuckDBStorage
-            from services.postgres_connector import PostgresConnector
-            from models.connection_profile import ConnectionProfile
+        elif source.source_type in ("postgres", "mysql"):
+            profile = self._resolve_db_profile(source)
 
-            # Cari profil: dari saved connection atau dari data inline form
-            profile = None
-            if source.connection_id:
-                storage = DuckDBStorage(self._settings.db_path)
-                cs = ConnectionStore(storage)
-                profile = cs.get_by_id(source.connection_id)
-                if not profile:
-                    raise ValueError(f"Profil koneksi tidak ditemukan: {source.connection_id}")
-            elif source.pg_connection_inline:
-                profile = ConnectionProfile.from_dict(source.pg_connection_inline)
+            if source.source_type == "mysql":
+                from services.mysql_connector import MySQLConnector
+                connector = MySQLConnector.from_profile(profile)
             else:
-                raise ValueError("Tidak ada informasi koneksi PostgreSQL. Isi detail koneksi atau pilih saved profile.")
+                from services.postgres_connector import PostgresConnector
+                connector = PostgresConnector.from_profile(profile)
 
-            pg = PostgresConnector.from_profile(profile)
             try:
-                return pg.import_to_duckdb(
+                return connector.import_to_duckdb(
                     conn, table_name,
                     schema=source.schema_name,
                     table=source.table_name,
@@ -260,9 +253,182 @@ class CompareWorker(QThread):
                     progress_callback=_progress,
                 )
             finally:
-                pg.close()
+                connector.close()
         else:
             raise ValueError(f"Tipe sumber data tidak dikenal: {source.source_type}")
+
+    # ------------------------------------------------------------------ DB profile resolver
+
+    def _resolve_db_profile(self, source):
+        """Resolve profil koneksi DB dari connection_id atau inline dict."""
+        from storage.connection_store import ConnectionStore
+        from storage.duckdb_storage import DuckDBStorage
+        from models.connection_profile import ConnectionProfile
+
+        if source.connection_id:
+            storage = DuckDBStorage(self._settings.db_path)
+            cs = ConnectionStore(storage)
+            profile = cs.get_by_id(source.connection_id)
+            if not profile:
+                raise ValueError(f"Profil koneksi tidak ditemukan: {source.connection_id}")
+            return profile
+        elif source.pg_connection_inline:
+            return ConnectionProfile.from_dict(source.pg_connection_inline)
+        else:
+            raise ValueError(
+                "Tidak ada informasi koneksi database. "
+                "Isi detail koneksi atau pilih saved profile."
+            )
+
+    # ------------------------------------------------------------------ DB vs DB parallel import
+
+    def _import_db_vs_db_parallel(self, conn: duckdb.DuckDBPyConnection):
+        """
+        Import kedua sumber DB secara paralel menggunakan ThreadPoolExecutor.
+        Returns (left_rows, right_rows).
+        """
+        import concurrent.futures
+        import threading
+
+        # Progress counters (thread-safe via list)
+        left_count = [0]
+        right_count = [0]
+        lock = threading.Lock()
+
+        def _left_progress(rows):
+            with lock:
+                left_count[0] = rows
+            self._log(f"  [kiri] {rows:,} baris diimpor...")
+            self._emit_progress(f"Mengimpor DB kiri: {rows:,} baris", rows, 0)
+
+        def _right_progress(rows):
+            with lock:
+                right_count[0] = rows
+            self._log(f"  [kanan] {rows:,} baris diimpor...")
+            self._emit_progress(f"Mengimpor DB kanan: {rows:,} baris", rows, 0)
+
+        chunk = self._settings.import_chunk_size
+        left_source = self._config.left_source
+        right_source = self._config.right_source
+
+        # DuckDB connections are NOT thread-safe; each thread gets its own temp DuckDB,
+        # then we copy both tables into the main conn after threads finish.
+        import tempfile, os
+        job_id = self._job.id
+
+        self._emit_progress(STEP_IMPORT_LEFT, 0, 0)
+        self._log("Memulai impor paralel DB kiri dan DB kanan...")
+
+        left_err = [None]
+        right_err = [None]
+        left_rows_result = [0]
+        right_rows_result = [0]
+
+        def import_left():
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as f:
+                    tmp_path = f.name
+                try:
+                    tmp_conn = duckdb.connect(tmp_path)
+                    profile = self._resolve_db_profile(left_source)
+                    if left_source.source_type == "mysql":
+                        from services.mysql_connector import MySQLConnector
+                        connector = MySQLConnector.from_profile(profile)
+                    else:
+                        from services.postgres_connector import PostgresConnector
+                        connector = PostgresConnector.from_profile(profile)
+                    try:
+                        left_rows_result[0] = connector.import_to_duckdb(
+                            tmp_conn, "src_left",
+                            schema=left_source.schema_name,
+                            table=left_source.table_name,
+                            custom_query=left_source.custom_query if left_source.use_custom_query else "",
+                            chunk_size=chunk,
+                            progress_callback=_left_progress,
+                        )
+                    finally:
+                        connector.close()
+                    tmp_conn.close()
+                    return tmp_path
+                except Exception:
+                    duckdb.connect(tmp_path).close()
+                    os.unlink(tmp_path)
+                    raise
+            except Exception as e:
+                left_err[0] = e
+                return None
+
+        def import_right():
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as f:
+                    tmp_path = f.name
+                try:
+                    tmp_conn = duckdb.connect(tmp_path)
+                    profile = self._resolve_db_profile(right_source)
+                    if right_source.source_type == "mysql":
+                        from services.mysql_connector import MySQLConnector
+                        connector = MySQLConnector.from_profile(profile)
+                    else:
+                        from services.postgres_connector import PostgresConnector
+                        connector = PostgresConnector.from_profile(profile)
+                    try:
+                        right_rows_result[0] = connector.import_to_duckdb(
+                            tmp_conn, "src_right",
+                            schema=right_source.schema_name,
+                            table=right_source.table_name,
+                            custom_query=right_source.custom_query if right_source.use_custom_query else "",
+                            chunk_size=chunk,
+                            progress_callback=_right_progress,
+                        )
+                    finally:
+                        connector.close()
+                    tmp_conn.close()
+                    return tmp_path
+                except Exception:
+                    duckdb.connect(tmp_path).close()
+                    os.unlink(tmp_path)
+                    raise
+            except Exception as e:
+                right_err[0] = e
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            fut_left = executor.submit(import_left)
+            fut_right = executor.submit(import_right)
+            left_tmp = fut_left.result()
+            right_tmp = fut_right.result()
+
+        if left_err[0]:
+            raise left_err[0]
+        if right_err[0]:
+            raise right_err[0]
+
+        # Attach temp DuckDB files and copy tables into main conn
+        try:
+            conn.execute(f"ATTACH '{left_tmp}' AS tmp_left (READ_ONLY)")
+            conn.execute("CREATE TABLE src_left AS SELECT * FROM tmp_left.src_left")
+            conn.execute("DETACH tmp_left")
+        finally:
+            try:
+                os.unlink(left_tmp)
+            except Exception:
+                pass
+
+        try:
+            conn.execute(f"ATTACH '{right_tmp}' AS tmp_right (READ_ONLY)")
+            conn.execute("CREATE TABLE src_right AS SELECT * FROM tmp_right.src_right")
+            conn.execute("DETACH tmp_right")
+        finally:
+            try:
+                os.unlink(right_tmp)
+            except Exception:
+                pass
+
+        self._log(
+            f"Impor paralel selesai: kiri {left_rows_result[0]:,} baris, "
+            f"kanan {right_rows_result[0]:,} baris"
+        )
+        return left_rows_result[0], right_rows_result[0]
 
     # ------------------------------------------------------------------ helpers
 

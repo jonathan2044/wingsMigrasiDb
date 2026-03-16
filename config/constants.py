@@ -21,11 +21,13 @@ JOB_STATUS_LABELS = {
 
 # ------------------------------------------------------------------ Job type
 JOB_TYPE_FILE_VS_FILE = "file_vs_file"
-JOB_TYPE_FILE_VS_PG = "file_vs_pg"
+JOB_TYPE_FILE_VS_PG   = "file_vs_pg"
+JOB_TYPE_DB_VS_DB     = "db_vs_db"
 
 JOB_TYPE_LABELS = {
     JOB_TYPE_FILE_VS_FILE: "File vs File",
-    JOB_TYPE_FILE_VS_PG: "File vs PostgreSQL",
+    JOB_TYPE_FILE_VS_PG:   "File vs Database",
+    JOB_TYPE_DB_VS_DB:     "Database vs Database",
 }
 
 # ------------------------------------------------------------------ Compare result status

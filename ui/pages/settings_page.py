@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QLineEdit, QSpinBox, QComboBox, QFormLayout,
     QGroupBox, QTabWidget, QScrollArea,
-    QTableWidget, QTableWidgetItem, QHeaderView,
+    QTableWidget, QTableWidgetItem, QHeaderView, QButtonGroup, QRadioButton,
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -92,29 +92,48 @@ class ConnectionFormDialog(QWidget):
         layout.addRow("", btn_row)
 
     def _populate(self, profile: ConnectionProfile):
+        db_type = getattr(profile, "db_type", "postgresql")
+        if db_type == "mysql":
+            self._rb_mysql.setChecked(True)
+        else:
+            self._rb_pg.setChecked(True)
         self._name.setText(profile.name)
         self._host.setText(profile.host)
         self._port.setValue(profile.port)
         self._database.setText(profile.database)
         self._username.setText(profile.username)
         self._password.setText(profile.password)
+        # Populate SSL options for the correct db type first
+        self._on_db_type_changed(True)
         idx = self._ssl_mode.findText(profile.ssl_mode)
         if idx >= 0:
             self._ssl_mode.setCurrentIndex(idx)
 
     def _test_connection(self):
         try:
-            from services.postgres_connector import PostgresConnector
-            pg = PostgresConnector(
-                host=self._host.text(),
-                port=self._port.value(),
-                database=self._database.text(),
-                username=self._username.text(),
-                password=self._password.text(),
-                ssl_mode=self._ssl_mode.currentText(),
-            )
-            success, msg = pg.test_connection()
-            pg.close()
+            db_type = "mysql" if self._rb_mysql.isChecked() else "postgresql"
+            if db_type == "mysql":
+                from services.mysql_connector import MySQLConnector
+                connector = MySQLConnector(
+                    host=self._host.text(),
+                    port=self._port.value(),
+                    database=self._database.text(),
+                    username=self._username.text(),
+                    password=self._password.text(),
+                    ssl_mode=self._ssl_mode.currentText(),
+                )
+            else:
+                from services.postgres_connector import PostgresConnector
+                connector = PostgresConnector(
+                    host=self._host.text(),
+                    port=self._port.value(),
+                    database=self._database.text(),
+                    username=self._username.text(),
+                    password=self._password.text(),
+                    ssl_mode=self._ssl_mode.currentText(),
+                )
+            success, msg = connector.test_connection()
+            connector.close()
 
             if success:
                 msg_info(self, "Koneksi Berhasil", msg)
@@ -128,6 +147,7 @@ class ConnectionFormDialog(QWidget):
             msg_warning(self, "Nama Kosong", "Isi nama profil terlebih dahulu.")
             return
         self._profile.name = self._name.text().strip()
+        self._profile.db_type = "mysql" if self._rb_mysql.isChecked() else "postgresql"
         self._profile.host = self._host.text().strip()
         self._profile.port = self._port.value()
         self._profile.database = self._database.text().strip()
@@ -190,12 +210,13 @@ class SettingsPage(QWidget):
         list_header.addWidget(add_btn)
         layout.addLayout(list_header)
 
-        self._conn_table = QTableWidget(0, 4)
+        self._conn_table = QTableWidget(0, 5)
         self._conn_table.setHorizontalHeaderLabels([
-            "Nama Profil", "Host:Port/Database", "User", "Aksi"
+            "Tipe", "Nama Profil", "Host:Port/Database", "User", "Aksi"
         ])
-        self._conn_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._conn_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._conn_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._conn_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self._conn_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._conn_table.verticalHeader().setVisible(False)
         self._conn_table.setMaximumHeight(250)
@@ -323,6 +344,7 @@ class SettingsPage(QWidget):
 
     def _show_add_form(self):
         self._conn_form._profile = ConnectionProfile()
+        self._conn_form._rb_pg.setChecked(True)
         self._conn_form._name.clear()
         self._conn_form._host.setText("localhost")
         self._conn_form._port.setValue(5432)
@@ -350,9 +372,25 @@ class SettingsPage(QWidget):
         for p in profiles:
             row = self._conn_table.rowCount()
             self._conn_table.insertRow(row)
-            self._conn_table.setItem(row, 0, QTableWidgetItem(p.name))
-            self._conn_table.setItem(row, 1, QTableWidgetItem(p.display_info))
-            self._conn_table.setItem(row, 2, QTableWidgetItem(p.username))
+
+            db_type = getattr(p, "db_type", "postgresql")
+            badge_label = QLabel("MySQL" if db_type == "mysql" else "PG")
+            badge_style = (
+                "background:#e67e22;color:#fff;border-radius:3px;padding:1px 6px;font-size:11px;"
+                if db_type == "mysql"
+                else "background:#2980b9;color:#fff;border-radius:3px;padding:1px 6px;font-size:11px;"
+            )
+            badge_label.setStyleSheet(badge_style)
+            badge_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge_widget = QWidget()
+            badge_layout = QHBoxLayout(badge_widget)
+            badge_layout.setContentsMargins(4, 2, 4, 2)
+            badge_layout.addWidget(badge_label)
+            self._conn_table.setCellWidget(row, 0, badge_widget)
+
+            self._conn_table.setItem(row, 1, QTableWidgetItem(p.name))
+            self._conn_table.setItem(row, 2, QTableWidgetItem(p.display_info))
+            self._conn_table.setItem(row, 3, QTableWidgetItem(p.username))
 
             act = QWidget()
             act_layout = QHBoxLayout(act)
@@ -366,7 +404,7 @@ class SettingsPage(QWidget):
                 lambda checked=False, pid=p.id, pname=p.name: self._delete_connection(pid, pname)
             )
             act_layout.addWidget(del_btn)
-            self._conn_table.setCellWidget(row, 3, act)
+            self._conn_table.setCellWidget(row, 4, act)
 
     def _save_general(self):
         self._settings.set("rows_per_page", self._rows_per_page.value())

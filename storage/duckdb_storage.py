@@ -45,10 +45,11 @@ CREATE TABLE IF NOT EXISTS templates (
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Tabel profil koneksi PostgreSQL
+-- Tabel profil koneksi PostgreSQL/MySQL
 CREATE TABLE IF NOT EXISTS connection_profiles (
     id               VARCHAR PRIMARY KEY,
     name             VARCHAR NOT NULL,
+    db_type          VARCHAR DEFAULT 'postgresql',
     host             VARCHAR,
     port             INTEGER DEFAULT 5432,
     database         VARCHAR,
@@ -89,6 +90,7 @@ class DuckDBStorage:
         "ALTER TABLE connection_profiles ADD COLUMN IF NOT EXISTS ssh_auth_method  VARCHAR DEFAULT 'password'",
         "ALTER TABLE connection_profiles ADD COLUMN IF NOT EXISTS ssh_password     VARCHAR DEFAULT ''",
         "ALTER TABLE connection_profiles ADD COLUMN IF NOT EXISTS ssh_key_path     VARCHAR DEFAULT ''",
+        "ALTER TABLE connection_profiles ADD COLUMN IF NOT EXISTS db_type          VARCHAR DEFAULT 'postgresql'",
     ]
 
     def initialize(self):

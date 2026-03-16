@@ -38,7 +38,7 @@ class _NoScrollComboBox(QComboBox):
             event.ignore()
 
 from config.constants import (
-    JOB_TYPE_FILE_VS_FILE, JOB_TYPE_FILE_VS_PG,
+    JOB_TYPE_FILE_VS_FILE, JOB_TYPE_FILE_VS_PG, JOB_TYPE_DB_VS_DB,
     JOB_STATUS_QUEUED,
 )
 from models.job import CompareJob
@@ -288,13 +288,22 @@ class _Step1SelectSource(QWidget):
         self._card_pg = self._make_mode_card(
             icons=["\U0001f5cb", "\u21c4", "\U0001f5c3"],
             icon_color=COLOR_PURPLE,
-            title="File vs PostgreSQL",
+            title="File vs Database",
             desc="Bandingkan file Excel atau CSV dengan tabel atau custom query di database PostgreSQL.",
             tags=[".xlsx", ".csv", "PostgreSQL"],
             job_type=JOB_TYPE_FILE_VS_PG,
         )
+        self._card_db = self._make_mode_card(
+            icons=["\U0001f5c3", "\u21c4", "\U0001f5c3"],
+            icon_color="#16a34a",
+            title="Database vs Database",
+            desc="Bandingkan dua tabel atau query langsung antara dua database (PostgreSQL atau MySQL). Cocok untuk data skala besar jutaan baris.",
+            tags=["PostgreSQL", "MySQL"],
+            job_type=JOB_TYPE_DB_VS_DB,
+        )
         card_row.addWidget(self._card_file, 1)
         card_row.addWidget(self._card_pg, 1)
+        card_row.addWidget(self._card_db, 1)
         vl.addLayout(card_row)
         vl.addSpacing(24)
 
@@ -391,6 +400,7 @@ class _Step1SelectSource(QWidget):
         )
         self._card_file.setStyleSheet(selected_style if job_type == JOB_TYPE_FILE_VS_FILE else default_style)
         self._card_pg.setStyleSheet(selected_style if job_type == JOB_TYPE_FILE_VS_PG else default_style)
+        self._card_db.setStyleSheet(selected_style if job_type == JOB_TYPE_DB_VS_DB else default_style)
         self.mode_changed.emit(job_type)
 
     def _refresh_templates(self):
@@ -1238,6 +1248,540 @@ class _PgConnectionCard(QFrame):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Step 2c — Generic DB source card (PostgreSQL OR MySQL, both sides)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class _DbSourceCard(QFrame):
+    """Reusable DB connection card — works for left AND right side of DB vs DB jobs.
+    Supports PostgreSQL and MySQL with dynamic SSL options and SSH tunnel.
+    """
+    headers_loaded = Signal(list)
+
+    def __init__(self, side: str, connection_store: "ConnectionStore", parent=None):
+        super().__init__(parent)
+        self._side = side  # "L" or "R"
+        self._connection_store = connection_store
+        self._headers: List[str] = []
+        self._db_type = "postgresql"  # "postgresql" or "mysql"
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setObjectName("dbCard")
+        self.setStyleSheet(
+            "QFrame#dbCard { background: white; border: 1px solid #e2e8f0; border-radius: 10px; }"
+        )
+        vl = QVBoxLayout(self)
+        vl.setContentsMargins(20, 18, 20, 20)
+        vl.setSpacing(12)
+
+        # Header with side badge and db type toggle
+        hdr_row = QHBoxLayout()
+        side_color = COLOR_PRIMARY if self._side == "L" else COLOR_PURPLE
+        badge = QLabel(f" {self._side} ")
+        badge.setStyleSheet(
+            f"background: {side_color}; color: white; border-radius: 4px; "
+            "font-size: 12px; font-weight: 700; padding: 2px 8px;"
+        )
+        side_lbl = QLabel(f"Source {'Kiri' if self._side == 'L' else 'Kanan'} (Database)")
+        side_lbl.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {COLOR_TEXT};")
+        hdr_row.addWidget(badge)
+        hdr_row.addWidget(side_lbl)
+        hdr_row.addStretch()
+        vl.addLayout(hdr_row)
+
+        # DB type toggle
+        db_type_row = QHBoxLayout()
+        self._rb_pg = QPushButton("PostgreSQL")
+        self._rb_mysql = QPushButton("MySQL")
+        for btn in (self._rb_pg, self._rb_mysql):
+            btn.setCheckable(True)
+            btn.setFixedHeight(30)
+        self._rb_pg.setChecked(True)
+        self._rb_pg.clicked.connect(lambda: self._set_db_type("postgresql"))
+        self._rb_mysql.clicked.connect(lambda: self._set_db_type("mysql"))
+        db_type_row.addWidget(self._rb_pg)
+        db_type_row.addWidget(self._rb_mysql)
+        db_type_row.addStretch()
+        vl.addLayout(db_type_row)
+        self._update_db_type_buttons()
+
+        # Saved connection dropdown
+        saved_row = QHBoxLayout()
+        self._saved_combo = _NoScrollComboBox()
+        self._saved_combo.setMinimumHeight(34)
+        self._load_saved_connections()
+        self._saved_combo.currentIndexChanged.connect(self._on_saved_conn_changed)
+        saved_row.addWidget(QLabel("Load:"))
+        saved_row.addWidget(self._saved_combo, 1)
+        vl.addLayout(saved_row)
+
+        # Host / Port
+        row1 = QHBoxLayout(); row1.setSpacing(12)
+        host_vl = QVBoxLayout(); host_vl.addWidget(QLabel("Host"))
+        self._host = QLineEdit(); self._host.setPlaceholderText("localhost")
+        self._host.setMinimumHeight(36); host_vl.addWidget(self._host)
+        row1.addLayout(host_vl, 3)
+        port_vl = QVBoxLayout(); port_vl.addWidget(QLabel("Port"))
+        self._port = QLineEdit("5432"); self._port.setFixedWidth(90)
+        self._port.setMinimumHeight(36); port_vl.addWidget(self._port)
+        row1.addLayout(port_vl, 1)
+        vl.addLayout(row1)
+
+        # Database / Schema
+        row2 = QHBoxLayout(); row2.setSpacing(12)
+        db_vl = QVBoxLayout(); db_vl.addWidget(QLabel("Database"))
+        self._database = QLineEdit(); self._database.setPlaceholderText("nama_database")
+        self._database.setMinimumHeight(36); db_vl.addWidget(self._database)
+        row2.addLayout(db_vl, 1)
+        schema_vl = QVBoxLayout()
+        self._schema_lbl = QLabel("Schema")
+        schema_vl.addWidget(self._schema_lbl)
+        self._schema = QLineEdit("public")
+        self._schema.setMinimumHeight(36); schema_vl.addWidget(self._schema)
+        row2.addLayout(schema_vl, 1)
+        vl.addLayout(row2)
+
+        # Username / Password
+        row3 = QHBoxLayout(); row3.setSpacing(12)
+        user_vl = QVBoxLayout(); user_vl.addWidget(QLabel("Username"))
+        self._username = QLineEdit(); self._username.setMinimumHeight(36)
+        user_vl.addWidget(self._username); row3.addLayout(user_vl, 1)
+        pass_vl = QVBoxLayout(); pass_vl.addWidget(QLabel("Password"))
+        pass_row = QHBoxLayout(); pass_row.setSpacing(0)
+        self._password = QLineEdit()
+        self._password.setEchoMode(QLineEdit.EchoMode.Password)
+        self._password.setMinimumHeight(36)
+        _toggle = QPushButton("\U0001f441")
+        _toggle.setObjectName("secondaryBtn"); _toggle.setFixedSize(36, 36)
+        _toggle.clicked.connect(self._toggle_password)
+        pass_row.addWidget(self._password, 1); pass_row.addWidget(_toggle)
+        pass_vl.addLayout(pass_row); row3.addLayout(pass_vl, 1)
+        vl.addLayout(row3)
+
+        # SSL
+        ssl_row = QHBoxLayout(); ssl_row.setSpacing(12)
+        ssl_vl = QVBoxLayout()
+        self._ssl_lbl = QLabel("SSL Mode")
+        ssl_vl.addWidget(self._ssl_lbl)
+        self._ssl_combo = _NoScrollComboBox(); self._ssl_combo.setMinimumHeight(36)
+        self._ssl_combo.addItems(["disable", "prefer", "require", "verify-ca", "verify-full"])
+        ssl_vl.addWidget(self._ssl_combo)
+        ssl_row.addLayout(ssl_vl, 1); ssl_row.addStretch(2)
+        vl.addLayout(ssl_row)
+
+        # Action buttons
+        action_row = QHBoxLayout()
+        self._test_btn = QPushButton("\u21bb  Test Connection")
+        self._test_btn.setStyleSheet(
+            f"QPushButton {{ background: white; color: {COLOR_PRIMARY}; "
+            f"border: 1px solid {COLOR_PRIMARY}; border-radius: 6px; padding: 6px 14px; }}"
+            f"QPushButton:hover {{ background: {COLOR_PRIMARY_LIGHT}; }}"
+        )
+        self._test_btn.clicked.connect(self._test_connection)
+        self._save_btn = QPushButton("\U0001f4be  Save connection")
+        self._save_btn.setStyleSheet(
+            f"background: transparent; color: {COLOR_TEXT_MUTED}; border: none; font-size: 12px;"
+        )
+        self._save_btn.clicked.connect(self._save_connection)
+        action_row.addWidget(self._test_btn)
+        action_row.addStretch()
+        action_row.addWidget(self._save_btn)
+        vl.addLayout(action_row)
+
+        # SSH Tunnel
+        self._ssh_check = QCheckBox("Gunakan SSH Tunnel")
+        self._ssh_check.setStyleSheet(f"color: {COLOR_TEXT}; font-size: 13px;")
+        self._ssh_check.toggled.connect(lambda enabled: self._ssh_panel.setVisible(enabled))
+        vl.addWidget(self._ssh_check)
+
+        self._ssh_panel = QFrame()
+        self._ssh_panel.setObjectName("sshPanel2")
+        self._ssh_panel.setStyleSheet(
+            "QFrame#sshPanel2 { background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px; }"
+        )
+        ssh_vl = QVBoxLayout(self._ssh_panel)
+        ssh_vl.setContentsMargins(14, 12, 14, 12); ssh_vl.setSpacing(10)
+        ssh_title = QLabel("\U0001f510 SSH TUNNEL")
+        ssh_title.setStyleSheet("font-size: 12px; font-weight: 700; color: #4338ca; background: transparent;")
+        ssh_vl.addWidget(ssh_title)
+        ssh_r1 = QHBoxLayout(); ssh_r1.setSpacing(12)
+        sh_vl = QVBoxLayout()
+        _l = QLabel("SSH Host"); _l.setStyleSheet("background: transparent;"); sh_vl.addWidget(_l)
+        self._ssh_host = QLineEdit(); self._ssh_host.setPlaceholderText("bastion.example.com")
+        self._ssh_host.setMinimumHeight(34); sh_vl.addWidget(self._ssh_host)
+        ssh_r1.addLayout(sh_vl, 3)
+        sp_vl = QVBoxLayout()
+        _l2 = QLabel("SSH Port"); _l2.setStyleSheet("background: transparent;"); sp_vl.addWidget(_l2)
+        self._ssh_port = QLineEdit("22"); self._ssh_port.setFixedWidth(80)
+        self._ssh_port.setMinimumHeight(34); sp_vl.addWidget(self._ssh_port)
+        ssh_r1.addLayout(sp_vl, 1); ssh_vl.addLayout(ssh_r1)
+        ssh_r2 = QHBoxLayout(); ssh_r2.setSpacing(12)
+        su_vl = QVBoxLayout()
+        _l3 = QLabel("SSH User"); _l3.setStyleSheet("background: transparent;"); su_vl.addWidget(_l3)
+        self._ssh_user = QLineEdit(); self._ssh_user.setPlaceholderText("ubuntu")
+        self._ssh_user.setMinimumHeight(34); su_vl.addWidget(self._ssh_user)
+        ssh_r2.addLayout(su_vl, 1)
+        sa_vl = QVBoxLayout()
+        _l4 = QLabel("Auth Method"); _l4.setStyleSheet("background: transparent;"); sa_vl.addWidget(_l4)
+        self._ssh_auth = _NoScrollComboBox()
+        self._ssh_auth.addItems(["Password", "Key"]); self._ssh_auth.setMinimumHeight(34)
+        self._ssh_auth.currentTextChanged.connect(self._toggle_ssh_auth)
+        sa_vl.addWidget(self._ssh_auth); ssh_r2.addLayout(sa_vl, 1); ssh_vl.addLayout(ssh_r2)
+        self._ssh_pass_w = QWidget(); self._ssh_pass_w.setStyleSheet("background: transparent;")
+        ssp_vl = QVBoxLayout(self._ssh_pass_w); ssp_vl.setContentsMargins(0,0,0,0)
+        _l5 = QLabel("SSH Password"); _l5.setStyleSheet("background: transparent;"); ssp_vl.addWidget(_l5)
+        self._ssh_password = QLineEdit(); self._ssh_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self._ssh_password.setMinimumHeight(34); ssp_vl.addWidget(self._ssh_password)
+        ssh_vl.addWidget(self._ssh_pass_w)
+        self._ssh_key_w = QWidget(); self._ssh_key_w.setStyleSheet("background: transparent;")
+        ssk_vl = QVBoxLayout(self._ssh_key_w); ssk_vl.setContentsMargins(0,0,0,0)
+        _l6 = QLabel("SSH Private Key Path"); _l6.setStyleSheet("background: transparent;"); ssk_vl.addWidget(_l6)
+        skr = QHBoxLayout(); skr.setSpacing(6)
+        self._ssh_key_path = QLineEdit(); self._ssh_key_path.setPlaceholderText("~/.ssh/id_rsa")
+        self._ssh_key_path.setMinimumHeight(34)
+        _bk = QPushButton("Browse"); _bk.setFixedHeight(34)
+        _bk.clicked.connect(self._browse_ssh_key)
+        skr.addWidget(self._ssh_key_path, 1); skr.addWidget(_bk)
+        ssk_vl.addLayout(skr); self._ssh_key_w.hide(); ssh_vl.addWidget(self._ssh_key_w)
+        self._ssh_panel.hide(); vl.addWidget(self._ssh_panel)
+
+        vl.addWidget(_Divider())
+
+        # Data Source: Table or Custom Query
+        ds_lbl = QLabel("Data Source")
+        ds_lbl.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {COLOR_TEXT};")
+        vl.addWidget(ds_lbl)
+
+        mode_row = QHBoxLayout(); mode_row.setSpacing(0)
+        self._table_mode_btn = QPushButton("\u229e  Select Table")
+        self._table_mode_btn.setCheckable(True); self._table_mode_btn.setChecked(True)
+        self._table_mode_btn.setFixedHeight(32)
+        self._table_mode_btn.clicked.connect(lambda: self._set_ds_mode("table"))
+        self._table_mode_btn.setStyleSheet(
+            f"QPushButton {{ background: {COLOR_PRIMARY}; color: white; "
+            "border-radius: 6px 0 0 6px; padding: 4px 14px; font-size: 12px; border: none; }}"
+            f"QPushButton:!checked {{ background: white; color: {COLOR_TEXT}; "
+            f"border: 1px solid {COLOR_BORDER}; }}"
+        )
+        self._query_mode_btn = QPushButton("</> Custom Query")
+        self._query_mode_btn.setCheckable(True)
+        self._query_mode_btn.setFixedHeight(32)
+        self._query_mode_btn.clicked.connect(lambda: self._set_ds_mode("query"))
+        self._query_mode_btn.setStyleSheet(
+            f"QPushButton {{ background: white; color: {COLOR_TEXT}; "
+            f"border: 1px solid {COLOR_BORDER}; border-left: none; "
+            "border-radius: 0 6px 6px 0; padding: 4px 14px; font-size: 12px; }}"
+            f"QPushButton:checked {{ background: {COLOR_PRIMARY}; color: white; border: none; }}"
+        )
+        mode_row.addWidget(self._table_mode_btn)
+        mode_row.addWidget(self._query_mode_btn)
+        mode_row.addStretch()
+        vl.addLayout(mode_row)
+
+        # Table selector
+        self._table_mode_widget = QWidget()
+        tm_hl = QHBoxLayout(self._table_mode_widget); tm_hl.setContentsMargins(0,0,0,0); tm_hl.setSpacing(12)
+        s_vl = QVBoxLayout(); s_vl.addWidget(QLabel("Schema"))
+        self._schema_combo = _NoScrollComboBox(); self._schema_combo.setMinimumHeight(36)
+        self._schema_combo.currentTextChanged.connect(self._on_schema_changed)
+        s_vl.addWidget(self._schema_combo); tm_hl.addLayout(s_vl, 1)
+        t_vl = QVBoxLayout(); t_vl.addWidget(QLabel("Table"))
+        self._table_combo = _NoScrollComboBox(); self._table_combo.setMinimumHeight(36)
+        self._table_combo.currentTextChanged.connect(self._on_table_changed)
+        t_vl.addWidget(self._table_combo); tm_hl.addLayout(t_vl, 2)
+        vl.addWidget(self._table_mode_widget)
+
+        # Custom query
+        self._query_mode_widget = QWidget()
+        qm_vl = QVBoxLayout(self._query_mode_widget); qm_vl.setContentsMargins(0,0,0,0)
+        self._custom_query = QTextEdit()
+        placeholder = "SELECT * FROM schema.table WHERE ..."
+        self._custom_query.setPlaceholderText(placeholder)
+        self._custom_query.setFixedHeight(80); qm_vl.addWidget(self._custom_query)
+        self._query_mode_widget.hide()
+        vl.addWidget(self._query_mode_widget)
+
+        self._load_cols_btn = QPushButton("\U0001f50d  Ambil Data")
+        self._load_cols_btn.setObjectName("secondaryBtn")
+        self._load_cols_btn.clicked.connect(lambda: self._load_columns(silent=False))
+        self._columns_status_lbl = QLabel("")
+        self._columns_status_lbl.setStyleSheet(f"color: {COLOR_SUCCESS}; font-size: 12px;")
+        vl.addWidget(self._load_cols_btn)
+        vl.addWidget(self._columns_status_lbl)
+        vl.addStretch()
+
+    # ------------------------------------------------------------------ db type
+
+    def _set_db_type(self, db_type: str):
+        self._db_type = db_type
+        self._update_db_type_buttons()
+        # Adjust port default
+        if db_type == "mysql" and self._port.text() == "5432":
+            self._port.setText("3306")
+        elif db_type == "postgresql" and self._port.text() == "3306":
+            self._port.setText("5432")
+        # Adjust SSL options
+        self._ssl_combo.blockSignals(True)
+        current = self._ssl_combo.currentText()
+        self._ssl_combo.clear()
+        if db_type == "mysql":
+            self._ssl_combo.addItems(["disabled", "required", "verify_ca"])
+            self._ssl_lbl.setText("SSL")
+            self._schema_lbl.setText("Database (schema)")
+        else:
+            self._ssl_combo.addItems(["disable", "prefer", "require", "verify-ca", "verify-full"])
+            self._ssl_lbl.setText("SSL Mode")
+            self._schema_lbl.setText("Schema")
+        self._ssl_combo.blockSignals(False)
+        # Re-select same value if still valid
+        idx = self._ssl_combo.findText(current)
+        if idx >= 0:
+            self._ssl_combo.setCurrentIndex(idx)
+        # Reload saved connections filtered by db_type
+        self._load_saved_connections()
+
+    def _update_db_type_buttons(self):
+        is_pg = self._db_type == "postgresql"
+        selected = (
+            f"background: {COLOR_PRIMARY}; color: white; border-radius: 4px; "
+            "padding: 2px 12px; border: none;"
+        )
+        unselected = (
+            f"background: white; color: {COLOR_TEXT}; border-radius: 4px; "
+            f"border: 1px solid {COLOR_BORDER}; padding: 2px 12px;"
+        )
+        self._rb_pg.setChecked(is_pg)
+        self._rb_mysql.setChecked(not is_pg)
+        self._rb_pg.setStyleSheet(selected if is_pg else unselected)
+        self._rb_mysql.setStyleSheet(selected if not is_pg else unselected)
+
+    # ------------------------------------------------------------------ saved connections
+
+    def _load_saved_connections(self):
+        self._saved_combo.clear()
+        self._saved_combo.addItem("\u2014 Load saved connection \u2014", None)
+        try:
+            for p in self._connection_store.get_all():
+                db_type = getattr(p, "db_type", "postgresql")
+                if db_type == self._db_type:
+                    label = f"{p.name}"
+                    self._saved_combo.addItem(label, p.id)
+        except Exception:
+            pass
+
+    def _on_saved_conn_changed(self, idx: int):
+        conn_id = self._saved_combo.currentData()
+        if not conn_id:
+            return
+        try:
+            profile = self._connection_store.get_by_id(conn_id)
+            if profile:
+                db_type = getattr(profile, "db_type", "postgresql")
+                self._set_db_type(db_type)
+                self._host.setText(profile.host)
+                self._port.setText(str(profile.port))
+                self._database.setText(profile.database)
+                self._username.setText(profile.username)
+                self._password.setText(profile.password)
+                idx2 = self._ssl_combo.findText(profile.ssl_mode)
+                if idx2 >= 0:
+                    self._ssl_combo.setCurrentIndex(idx2)
+                self._ssh_check.setChecked(bool(getattr(profile, "use_ssh_tunnel", False)))
+                self._ssh_host.setText(getattr(profile, "ssh_host", ""))
+                self._ssh_port.setText(str(getattr(profile, "ssh_port", 22)))
+                self._ssh_user.setText(getattr(profile, "ssh_user", ""))
+                auth = getattr(profile, "ssh_auth_method", "password")
+                self._ssh_auth.setCurrentText("Key" if auth == "key" else "Password")
+                self._ssh_password.setText(getattr(profile, "ssh_password", ""))
+                self._ssh_key_path.setText(getattr(profile, "ssh_key_path", ""))
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------ SSH helpers
+
+    def _toggle_password(self):
+        if self._password.echoMode() == QLineEdit.EchoMode.Password:
+            self._password.setEchoMode(QLineEdit.EchoMode.Normal)
+        else:
+            self._password.setEchoMode(QLineEdit.EchoMode.Password)
+
+    def _toggle_ssh_auth(self, method: str):
+        is_password = method == "Password"
+        self._ssh_pass_w.setVisible(is_password)
+        self._ssh_key_w.setVisible(not is_password)
+
+    def _browse_ssh_key(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Pilih SSH Private Key", os.path.expanduser("~/.ssh")
+        )
+        if path:
+            self._ssh_key_path.setText(path)
+
+    # ------------------------------------------------------------------ data source mode
+
+    def _set_ds_mode(self, mode: str):
+        is_table = mode == "table"
+        self._table_mode_btn.setChecked(is_table)
+        self._query_mode_btn.setChecked(not is_table)
+        self._table_mode_widget.setVisible(is_table)
+        self._query_mode_widget.setVisible(not is_table)
+        if is_table and self._table_combo.currentText():
+            self._load_columns(silent=True)
+        elif not is_table:
+            self._headers = []
+            self._columns_status_lbl.setText("Klik \"Ambil Data\" untuk load kolom dari query")
+            self.headers_loaded.emit([])
+
+    def _on_schema_changed(self, schema: str):
+        if not schema:
+            return
+        connector = None
+        try:
+            connector = self._build_connector()
+            tables = connector.list_tables(schema)
+            self._table_combo.clear()
+            self._table_combo.addItems(tables)
+        except Exception:
+            pass
+        finally:
+            if connector:
+                connector.close()
+
+    def _on_table_changed(self, table: str):
+        if not table:
+            self._headers = []
+            self._columns_status_lbl.setText("")
+            return
+        if not self._query_mode_btn.isChecked():
+            self._load_columns(silent=True)
+
+    def _load_columns(self, silent: bool = False):
+        connector = None
+        try:
+            import pandas as pd
+            connector = self._build_connector()
+            engine = connector._get_engine()
+            if self._query_mode_btn.isChecked():
+                query = self._custom_query.toPlainText().strip()
+                if not query:
+                    if not silent:
+                        msg_warning(self, "Query Kosong", "Isi SQL query dulu.")
+                    return
+                df = pd.read_sql(f"SELECT * FROM ({query}) AS q LIMIT 0", engine)
+                headers = list(df.columns)
+                row_count_df = pd.read_sql(f"SELECT COUNT(*) AS n FROM ({query}) AS q", engine)
+                row_count = int(row_count_df.iloc[0, 0])
+            else:
+                schema = self._schema_combo.currentText()
+                table = self._table_combo.currentText()
+                if not schema or not table:
+                    return
+                headers = connector.get_columns(schema, table)
+                row_count_df = pd.read_sql(
+                    f'SELECT COUNT(*) AS n FROM `{schema}`.`{table}`'
+                    if self._db_type == "mysql"
+                    else f'SELECT COUNT(*) AS n FROM "{schema}"."{table}"',
+                    engine
+                )
+                row_count = int(row_count_df.iloc[0, 0])
+            self._headers = headers
+            self.headers_loaded.emit(headers)
+            self._columns_status_lbl.setText(
+                f"\u2713 {len(headers)} kolom dimuat \u00b7 {row_count:,} baris data"
+            )
+            if not silent:
+                msg_info(self, "Data Dimuat", f"{len(headers)} kolom · {row_count:,} baris.")
+        except Exception as e:
+            self._columns_status_lbl.setText("")
+            if not silent:
+                msg_critical(self, "Gagal Load Kolom", str(e))
+        finally:
+            if connector:
+                connector.close()
+
+    # ------------------------------------------------------------------ connection builder
+
+    def _build_profile(self):
+        from models.connection_profile import ConnectionProfile
+        p = ConnectionProfile()
+        p.db_type  = self._db_type
+        p.host     = self._host.text().strip()
+        p.port     = int(self._port.text().strip() or ("3306" if self._db_type == "mysql" else "5432"))
+        p.database = self._database.text().strip()
+        p.username = self._username.text().strip()
+        p.password = self._password.text()
+        p.ssl_mode = self._ssl_combo.currentText()
+        p.name     = f"{p.username}@{p.host}/{p.database}"
+        p.use_ssh_tunnel = self._ssh_check.isChecked()
+        p.ssh_host        = self._ssh_host.text().strip()
+        p.ssh_port        = int(self._ssh_port.text().strip() or "22")
+        p.ssh_user        = self._ssh_user.text().strip()
+        p.ssh_auth_method = self._ssh_auth.currentText().lower()
+        p.ssh_password    = self._ssh_password.text()
+        p.ssh_key_path    = self._ssh_key_path.text().strip()
+        return p
+
+    def _build_connector(self):
+        profile = self._build_profile()
+        if self._db_type == "mysql":
+            from services.mysql_connector import MySQLConnector
+            return MySQLConnector.from_profile(profile)
+        else:
+            from services.postgres_connector import PostgresConnector
+            return PostgresConnector.from_profile(profile)
+
+    def _test_connection(self):
+        connector = None
+        try:
+            profile = self._build_profile()
+            if not profile.host or not profile.database:
+                msg_warning(self, "Input Tidak Lengkap", "Isi Host dan Database terlebih dahulu.")
+                return
+            connector = self._build_connector()
+            ok, msg_txt = connector.test_connection()
+            if ok:
+                schemas = connector.list_schemas()
+                self._schema_combo.clear()
+                self._schema_combo.addItems(schemas)
+                msg_info(self, "Koneksi Berhasil \u2713", f"Terkoneksi!\n{msg_txt}")
+            else:
+                msg_critical(self, "Koneksi Gagal", msg_txt)
+        except Exception as e:
+            msg_critical(self, "Koneksi Error", str(e))
+        finally:
+            if connector:
+                connector.close()
+
+    def _save_connection(self):
+        try:
+            if msg_question(self, "Simpan Koneksi", "Simpan koneksi ini ke daftar saved connections?"):
+                self._connection_store.save(self._build_profile())
+                self._load_saved_connections()
+                msg_info(self, "Tersimpan", "Profil koneksi berhasil disimpan.")
+        except Exception as e:
+            msg_critical(self, "Gagal Simpan", str(e))
+
+    # ------------------------------------------------------------------ public API
+
+    def get_headers(self) -> List[str]:
+        return self._headers
+
+    def get_source_config(self) -> DataSourceConfig:
+        cfg = DataSourceConfig()
+        cfg.source_type = self._db_type  # "postgresql" or "mysql"
+        cfg.connection_id = self._saved_combo.currentData() or ""
+        cfg.schema_name = self._schema_combo.currentText()
+        cfg.table_name  = self._table_combo.currentText()
+        cfg.use_custom_query = self._query_mode_btn.isChecked()
+        cfg.custom_query = self._custom_query.toPlainText().strip()
+        cfg.pg_connection_inline = self._build_profile().to_dict()
+        return cfg
+
+    def is_ready(self) -> bool:
+        return bool(self._host.text().strip() and self._database.text().strip())
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Step 2 — Import Files container
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1270,15 +1814,23 @@ class _Step2ImportFiles(QWidget):
         self._left_file_card  = _FileSourceCard("L", COLOR_PRIMARY)
         self._right_file_card = _FileSourceCard("R", COLOR_PURPLE)
         self._right_pg_card   = _PgConnectionCard(self._connection_store)
+        self._left_db_card    = _DbSourceCard("L", self._connection_store)
+        self._right_db_card   = _DbSourceCard("R", self._connection_store)
 
         self._left_file_card.headers_loaded.connect(self._on_left_headers)
         self._right_file_card.headers_loaded.connect(self._on_right_headers)
         self._right_pg_card.headers_loaded.connect(self._on_right_headers)
+        self._left_db_card.headers_loaded.connect(self._on_left_headers)
+        self._right_db_card.headers_loaded.connect(self._on_right_headers)
 
         self._cards_row.addWidget(self._left_file_card, 1)
         self._cards_row.addWidget(self._right_file_card, 1)
         self._cards_row.addWidget(self._right_pg_card, 1)
+        self._cards_row.addWidget(self._left_db_card, 1)
+        self._cards_row.addWidget(self._right_db_card, 1)
         self._right_pg_card.hide()
+        self._left_db_card.hide()
+        self._right_db_card.hide()
         vl.addLayout(self._cards_row, 1)
         vl.addSpacing(14)
 
@@ -1297,7 +1849,7 @@ class _Step2ImportFiles(QWidget):
         self._check_column_diff()
 
     def _check_column_diff(self):
-        lh = self._left_file_card.get_headers()
+        lh = self.get_left_headers()
         rh = self.get_right_headers()
         if lh and rh and set(lh) != set(rh):
             self._diff_banner.show()
@@ -1306,35 +1858,52 @@ class _Step2ImportFiles(QWidget):
 
     def set_job_type(self, job_type: str):
         self._job_type = job_type
-        is_ff = job_type == JOB_TYPE_FILE_VS_FILE
+        is_ff  = job_type == JOB_TYPE_FILE_VS_FILE
+        is_fpg = job_type == JOB_TYPE_FILE_VS_PG
+        is_db  = job_type == JOB_TYPE_DB_VS_DB
+        self._left_file_card.setVisible(is_ff or is_fpg)
         self._right_file_card.setVisible(is_ff)
-        self._right_pg_card.setVisible(not is_ff)
+        self._right_pg_card.setVisible(is_fpg)
+        self._left_db_card.setVisible(is_db)
+        self._right_db_card.setVisible(is_db)
         if is_ff:
             self._title.setText("Step 2 \u2014 Import Files & Select Sheets")
+        elif is_fpg:
+            self._title.setText("Step 2 \u2014 File Kiri & Koneksi Database Kanan")
         else:
-            self._title.setText("PostgreSQL Connection Setup \u2014 Right Source")
+            self._title.setText("Step 2 \u2014 Pilih Tabel / Query Database Kiri & Kanan")
 
     def get_left_source(self) -> DataSourceConfig:
+        if self._job_type == JOB_TYPE_DB_VS_DB:
+            return self._left_db_card.get_source_config()
         return self._left_file_card.get_source_config()
 
     def get_right_source(self) -> DataSourceConfig:
         if self._job_type == JOB_TYPE_FILE_VS_FILE:
             return self._right_file_card.get_source_config()
+        if self._job_type == JOB_TYPE_DB_VS_DB:
+            return self._right_db_card.get_source_config()
         return self._right_pg_card.get_source_config()
 
     def get_left_headers(self) -> List[str]:
+        if self._job_type == JOB_TYPE_DB_VS_DB:
+            return self._left_db_card.get_headers()
         return self._left_file_card.get_headers()
 
     def get_right_headers(self) -> List[str]:
         if self._job_type == JOB_TYPE_FILE_VS_FILE:
             return self._right_file_card.get_headers()
+        if self._job_type == JOB_TYPE_DB_VS_DB:
+            return self._right_db_card.get_headers()
         return self._right_pg_card.get_headers()
 
     def is_ready(self) -> bool:
-        left_ok = self._left_file_card.is_loaded()
         if self._job_type == JOB_TYPE_FILE_VS_FILE:
-            return left_ok and self._right_file_card.is_loaded()
-        return left_ok and self._right_pg_card.is_ready()
+            return self._left_file_card.is_loaded() and self._right_file_card.is_loaded()
+        if self._job_type == JOB_TYPE_DB_VS_DB:
+            return self._left_db_card.is_ready() and self._right_db_card.is_ready()
+        # FILE_VS_PG
+        return self._left_file_card.is_loaded() and self._right_pg_card.is_ready()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
