@@ -187,6 +187,7 @@ class CompareOptions:
     decimal_places: int = 2
     apply_global_transforms: bool = True        # gunakan global column transform rules
     apply_group_expansion: bool = True            # gunakan global group expansion rules
+    comparison_mode: str = "standard"             # "standard" | "column_expansion" | "row_expansion"
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()
@@ -197,6 +198,10 @@ class CompareOptions:
         for k, v in d.items():
             if hasattr(obj, k):
                 setattr(obj, k, v)
+        # Backward compat: job lama tidak punya comparison_mode
+        # tapi punya apply_group_expansion=True → anggap column_expansion
+        if not d.get("comparison_mode") and d.get("apply_group_expansion"):
+            obj.comparison_mode = "column_expansion"
         return obj
 
 

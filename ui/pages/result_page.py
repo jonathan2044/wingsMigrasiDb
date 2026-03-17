@@ -301,10 +301,21 @@ class _SummaryCard(QFrame):
         self._pct = QLabel("0.0%")
         self._pct.setStyleSheet(f"color: {color}; font-size: 12px;")
         vl.addWidget(self._pct)
+        self._note = QLabel("")
+        self._note.setWordWrap(True)
+        self._note.setStyleSheet(
+            f"color: {COLOR_TEXT_MUTED}; font-size: 11px; margin-top: 4px;"
+        )
+        self._note.hide()
+        vl.addWidget(self._note)
 
     def update_data(self, count: int, total: int):
         self._count.setText(_fmt(count))
         self._pct.setText(_pct(count, total))
+
+    def update_note(self, text: str):
+        self._note.setText(text)
+        self._note.setVisible(bool(text))
 
     def mousePressEvent(self, event):
         self.filter_clicked.emit(self._status)
@@ -478,16 +489,37 @@ class _SummaryView(QWidget):
         self.filter_detail.emit(status)
         self.view_detail_requested.emit()
 
-    def load(self, job: "CompareJob", summary: dict, breakdown: list):
+    def load(
+        self,
+        job: "CompareJob",
+        summary: dict,
+        breakdown: list,
+        dup_breakdown: dict = None,
+    ):
         total = summary.get("total_rows", 0)
+        dup_count = summary.get(RESULT_DUPLICATE_KEY, 0)
+        clean_total = total - dup_count
         self._bc.setText(f"{job.job_number}  \u203a  Hasil Konversi")
         self._title.setText(f"{job.name}  \u2014  Hasil Konversi")
-        self._meta.setText(
-            f"{_fmt(total)} rows  \u00b7  Completed in {job.duration_str}  "
-            f"\u00b7  {job.time_ago_str}"
-        )
+        meta_parts = [f"{_fmt(clean_total)} baris divalidasi"]
+        if dup_count:
+            meta_parts.append(f"{_fmt(dup_count)} baris duplikat tidak dihitung")
+        meta_parts.append(f"selesai dalam {job.duration_str}")
+        meta_parts.append(job.time_ago_str)
+        self._meta.setText("  \u00b7  ".join(meta_parts))
         for s, card in self._cards.items():
             card.update_data(summary.get(s, 0), total)
+            card.update_note("")
+        # Penjelasan breakdown duplikat
+        if dup_count and dup_breakdown:
+            dup_left  = dup_breakdown.get("dup_left", 0)
+            dup_right = dup_breakdown.get("dup_right", 0)
+            parts = []
+            if dup_left:  parts.append(f"Sumber (kiri): {_fmt(dup_left)} baris")
+            if dup_right: parts.append(f"Target (kanan): {_fmt(dup_right)} baris")
+            note = ("  \u00b7  ".join(parts) + "  \u2014  key ganda, tidak bisa divalidasi") if parts else \
+                   "Key ganda di salah satu sisi \u2014 tidak bisa divalidasi"
+            self._cards[RESULT_DUPLICATE_KEY].update_note(note)
         self._dist_bar.set_data(summary)
         self._populate_breakdown(breakdown, summary.get(RESULT_MISMATCH, 0))
 
@@ -976,12 +1008,17 @@ class ResultPage(QWidget):
             return
         summary = self._job.result_summary or {}
         breakdown: list = []
+        dup_breakdown: dict = {}
         if self._repo:
             try:
                 breakdown = self._repo.get_mismatch_column_breakdown()
             except Exception:
                 pass
-        self._summary.load(self._job, summary, breakdown)
+            try:
+                dup_breakdown = self._repo.get_duplicate_key_breakdown()
+            except Exception:
+                pass
+        self._summary.load(self._job, summary, breakdown, dup_breakdown)
 
     def _setup_detail_columns(self):
         if not self._job:

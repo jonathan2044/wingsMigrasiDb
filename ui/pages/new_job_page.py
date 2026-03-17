@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QFrame, QLineEdit, QComboBox, QCheckBox, QFileDialog,
     QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView,
     QTextEdit, QSpinBox, QStackedWidget,
-    QAbstractItemView, QTableView,
+    QAbstractItemView, QTableView, QRadioButton, QButtonGroup,
 )
 
 
@@ -40,6 +40,7 @@ class _NoScrollComboBox(QComboBox):
 from config.constants import (
     JOB_TYPE_FILE_VS_FILE, JOB_TYPE_FILE_VS_PG, JOB_TYPE_DB_VS_DB,
     JOB_STATUS_QUEUED,
+    COMPARE_MODE_STANDARD, COMPARE_MODE_COL_EXPANSION, COMPARE_MODE_ROW_EXPANSION,
 )
 from models.job import CompareJob
 from models.compare_config import (
@@ -2355,42 +2356,100 @@ class _Step4Options(QWidget):
         vl.addWidget(tr_card)
         self._refresh_transform_summary()
 
-        # Group Expansion card
-        ge_card = _Card()
-        ge_vl = QVBoxLayout(ge_card)
-        ge_vl.setContentsMargins(20, 18, 20, 18)
-        ge_vl.setSpacing(0)
-        ge_hdr = QHBoxLayout()
-        ge_hdr.addWidget(QLabel("\U0001f500"))
-        ge_title = QLabel("1-to-Many Group Expansion")
-        ge_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {COLOR_TEXT};")
-        ge_hdr.addWidget(ge_title)
-        ge_hdr.addStretch()
-        ge_vl.addLayout(ge_hdr)
-        ge_sub = QLabel(
-            "Terapkan aturan ekspansi group global dari Settings. "
-            "Berlaku untuk kolom yang namanya cocok dengan rule. "
-            "Nilai kiri tidak ada di mapping \u2192 fallback 1-to-1 + warning log. "
-            "Baris kanan tidak ter-cover \u2192 MISSING_LEFT."
+        # Mode Perbandingan card
+        mode_card = _Card()
+        mode_vl = QVBoxLayout(mode_card)
+        mode_vl.setContentsMargins(20, 18, 20, 18)
+        mode_vl.setSpacing(0)
+        mode_hdr = QHBoxLayout()
+        mode_hdr.addWidget(QLabel("\U0001f300"))
+        mode_title = QLabel("Mode Perbandingan")
+        mode_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {COLOR_TEXT};")
+        mode_hdr.addWidget(mode_title)
+        mode_hdr.addStretch()
+        mode_vl.addLayout(mode_hdr)
+        mode_desc = QLabel(
+            "Pilih cara sistem mencocokkan baris data dari sumber (kiri) ke target (kanan)."
         )
-        ge_sub.setWordWrap(True)
-        ge_sub.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
-        ge_vl.addWidget(ge_sub)
-        ge_vl.addSpacing(10)
-        self._opt_group_expansion = _NormToggleRow(
-            "Aktifkan Group Expansion",
-            "ON = rules dari Settings diterapkan pada kolom yang cocok namanya",
-            True,
-        )
-        ge_vl.addWidget(self._opt_group_expansion)
-        ge_vl.addWidget(_Divider())
+        mode_desc.setWordWrap(True)
+        mode_desc.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
+        mode_vl.addWidget(mode_desc)
+        mode_vl.addSpacing(12)
+
+        self._mode_btn_group = QButtonGroup(self)
+
+        def _make_mode_row(radio: QRadioButton, judul: str, keterangan: str) -> QWidget:
+            w = QWidget()
+            hl = QHBoxLayout(w)
+            hl.setContentsMargins(0, 6, 0, 6)
+            hl.setSpacing(12)
+            hl.addWidget(radio)
+            tv = QVBoxLayout()
+            tv.setSpacing(1)
+            tv.setContentsMargins(0, 0, 0, 0)
+            t1 = QLabel(judul)
+            t1.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {COLOR_TEXT};")
+            t2 = QLabel(keterangan)
+            t2.setWordWrap(True)
+            t2.setStyleSheet(f"font-size: 12px; color: {COLOR_TEXT_MUTED};")
+            tv.addWidget(t1)
+            tv.addWidget(t2)
+            hl.addLayout(tv)
+            hl.addStretch()
+            return w
+
+        self._mode_standard = QRadioButton()
+        self._mode_standard.setChecked(True)
+        self._mode_btn_group.addButton(self._mode_standard, 0)
+        mode_vl.addWidget(_make_mode_row(
+            self._mode_standard,
+            "Standard (1:1)",
+            "Setiap key di sumber harus punya tepat satu padanan di target. "
+            "Cocok untuk tabel yang jumlah barisnya sama di kedua sisi.",
+        ))
+        mode_vl.addWidget(_Divider())
+
+        self._mode_col_exp = QRadioButton()
+        self._mode_btn_group.addButton(self._mode_col_exp, 1)
+        mode_vl.addWidget(_make_mode_row(
+            self._mode_col_exp,
+            "Ekspansi Kolom",
+            "1 key di sumber = 1 key di target, tapi target punya kolom tambahan "
+            "yang merupakan hasil pemetaan group (misalnya cust_group \u2192 cust_group1 + cust_group2).",
+        ))
+
+        # Detail GE rules — hanya tampil kalau mode Ekspansi Kolom dipilih
+        self._ge_detail_widget = QWidget()
+        ge_detail_vl = QVBoxLayout(self._ge_detail_widget)
+        ge_detail_vl.setContentsMargins(32, 4, 0, 4)
+        ge_detail_vl.setSpacing(4)
         self._ge_rules_summary = QLabel("")
         self._ge_rules_summary.setWordWrap(True)
         self._ge_rules_summary.setStyleSheet(
-            f"color: {COLOR_TEXT_MUTED}; font-size: 12px; padding: 4px 0;"
+            f"color: {COLOR_TEXT_MUTED}; font-size: 12px; padding: 2px 0;"
         )
-        ge_vl.addWidget(self._ge_rules_summary)
-        vl.addWidget(ge_card)
+        ge_detail_vl.addWidget(self._ge_rules_summary)
+        mode_vl.addWidget(self._ge_detail_widget)
+        self._ge_detail_widget.hide()
+        mode_vl.addWidget(_Divider())
+
+        self._mode_row_exp = QRadioButton()
+        self._mode_btn_group.addButton(self._mode_row_exp, 2)
+        mode_vl.addWidget(_make_mode_row(
+            self._mode_row_exp,
+            "Ekspansi Baris (1:N)",
+            "1 key di sumber bisa menghasilkan N baris di target. "
+            "Sistem akan mengelompokkan baris target berdasarkan key sumber, "
+            "lalu memverifikasi semua baris tersebut. "
+            "Baris target yang tidak punya pasangan di sumber akan dilaporkan "
+            "sebagai \u2018Tidak Ada di Kiri\u2019.",
+        ))
+
+        self._mode_col_exp.toggled.connect(self._on_mode_changed)
+        self._mode_standard.toggled.connect(self._on_mode_changed)
+        self._mode_row_exp.toggled.connect(self._on_mode_changed)
+
+        vl.addWidget(mode_card)
         self._refresh_ge_summary()
 
         sum_card = _Card()
@@ -2447,15 +2506,19 @@ class _Step4Options(QWidget):
         for (_, v), val in zip(self._summary_rows, values):
             v.setText(val)
 
+    def _on_mode_changed(self):
+        self._ge_detail_widget.setVisible(self._mode_col_exp.isChecked())
+
     def update_normalizations_label(self):
         active = []
-        if self._opt_trim.is_checked():            active.append("Trim whitespace")
-        if self._opt_case.is_checked():            active.append("Ignore case")
-        if self._opt_null.is_checked():            active.append("Empty = null")
-        if self._opt_date.is_checked():            active.append("Normalize date")
-        if self._opt_num.is_checked():             active.append("Normalize number")
-        if self._opt_transforms.is_checked():      active.append("Global transforms")
-        if self._opt_group_expansion.is_checked(): active.append("Group expansion")
+        if self._opt_trim.is_checked():       active.append("Trim whitespace")
+        if self._opt_case.is_checked():       active.append("Ignore case")
+        if self._opt_null.is_checked():       active.append("Empty = null")
+        if self._opt_date.is_checked():       active.append("Normalize date")
+        if self._opt_num.is_checked():        active.append("Normalize number")
+        if self._opt_transforms.is_checked(): active.append("Transformasi kolom")
+        if self._mode_col_exp.isChecked():    active.append("Ekspansi Kolom (GE)")
+        elif self._mode_row_exp.isChecked():  active.append("Ekspansi Baris (1:N)")
         self._summary_rows[6][1].setText(", ".join(active) if active else "Tidak ada")
 
     def _refresh_transform_summary(self):
@@ -2502,6 +2565,12 @@ class _Step4Options(QWidget):
         self._ge_rules_summary.setText(txt)
 
     def get_options(self) -> CompareOptions:
+        if self._mode_row_exp.isChecked():
+            mode = COMPARE_MODE_ROW_EXPANSION
+        elif self._mode_col_exp.isChecked():
+            mode = COMPARE_MODE_COL_EXPANSION
+        else:
+            mode = COMPARE_MODE_STANDARD
         return CompareOptions(
             trim_whitespace=self._opt_trim.is_checked(),
             ignore_case=self._opt_case.is_checked(),
@@ -2509,7 +2578,8 @@ class _Step4Options(QWidget):
             normalize_date=self._opt_date.is_checked(),
             normalize_number=self._opt_num.is_checked(),
             apply_global_transforms=self._opt_transforms.is_checked(),
-            apply_group_expansion=self._opt_group_expansion.is_checked(),
+            apply_group_expansion=(mode == COMPARE_MODE_COL_EXPANSION),
+            comparison_mode=mode,
         )
 
     def should_save_template(self) -> bool:

@@ -195,6 +195,31 @@ class ResultRepository:
             logger.warning("Gagal hitung breakdown mismatch: %s", e)
             return []
 
+    def get_duplicate_key_breakdown(self) -> Dict[str, int]:
+        """
+        Hitung berapa baris duplicate_key dari sisi kiri vs kanan.
+        - dup_left  : baris yang berasal dari sumber (kiri) — key-nya muncul > 1x di sumber
+        - dup_right : baris yang berasal dari target (kanan) — key-nya muncul > 1x di target
+        """
+        if not self._conn:
+            return {"dup_left": 0, "dup_right": 0}
+        try:
+            row = self._conn.execute("""
+                SELECT
+                    SUM(CASE WHEN left_data IS NOT NULL AND left_data != '{}' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN (left_data IS NULL OR left_data = '{}')
+                              AND right_data IS NOT NULL AND right_data != '{}' THEN 1 ELSE 0 END)
+                FROM compare_results
+                WHERE status = 'duplicate_key'
+            """).fetchone()
+            return {
+                "dup_left":  int(row[0] or 0),
+                "dup_right": int(row[1] or 0),
+            }
+        except Exception as e:
+            logger.warning("Gagal hitung breakdown duplikat: %s", e)
+            return {"dup_left": 0, "dup_right": 0}
+
     def export_to_file(self, output_path: str, status_filter: Optional[str] = None) -> None:
         """
         Export hasil ke file CSV atau Excel secara efisien.

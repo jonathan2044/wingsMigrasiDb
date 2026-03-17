@@ -53,6 +53,17 @@ RESULT_STATUS_COLORS = {
     RESULT_DUPLICATE_KEY: "#eab308",
 }
 
+# ------------------------------------------------------------------ Comparison mode
+COMPARE_MODE_STANDARD      = "standard"
+COMPARE_MODE_COL_EXPANSION = "column_expansion"
+COMPARE_MODE_ROW_EXPANSION = "row_expansion"
+
+COMPARE_MODE_LABELS = {
+    COMPARE_MODE_STANDARD:      "Standard (1:1)",
+    COMPARE_MODE_COL_EXPANSION: "Ekspansi Kolom",
+    COMPARE_MODE_ROW_EXPANSION: "Ekspansi Baris (1:N)",
+}
+
 # ------------------------------------------------------------------ Worker signals step names
 STEP_INIT = "Inisialisasi perbandingan..."
 STEP_IMPORT_LEFT = "Mengimpor data kiri..."
