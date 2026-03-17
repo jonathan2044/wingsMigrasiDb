@@ -47,8 +47,21 @@ jobs:
           pip install -r requirements.txt
         shell: cmd
 
+      # ── 4b. Verifikasi semua local package dapat diimport ─────────────────
+      # Jika langkah ini gagal, build.spec PASTI gagal mengemas modul tersebut.
+      - name: Verify local package imports
+        run: |
+          python -c "import sys; sys.path.insert(0, '.'); import core.compare_engine; import core.normalization_engine; import workers.compare_worker; import models.compare_config; import config.constants; print('All local imports OK')"
+        shell: cmd
+
       # ── 5. Jalankan PyInstaller ───────────────────────────────────────────
+      # PYTHONPATH wajib di-set agar PyInstaller analysis phase dapat
+      # mengimport semua local packages (core, models, workers, dll.).
+      # pathex di build.spec sudah di-set, tapi env PYTHONPATH adalah
+      # cara paling andal di Windows runner GitHub Actions.
       - name: Build with PyInstaller
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           pyinstaller build.spec --noconfirm
         shell: cmd

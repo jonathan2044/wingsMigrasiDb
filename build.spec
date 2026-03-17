@@ -17,9 +17,8 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 project_dir = Path(SPECPATH)
 
 # Tambahkan project dir ke sys.path agar collect_submodules dapat menemukan local packages.
-# Ini penting di Windows di mana PyInstaller mungkin tidak otomatis menambahkan project dir.
-if str(project_dir) not in _sys.path:
-    _sys.path.insert(0, str(project_dir))
+# Selalu insert (tidak cek dulu) untuk menghindari masalah normalisasi path Windows.
+_sys.path.insert(0, str(project_dir))
 
 # Kumpulkan SEMUA submodul dari setiap local package —
 # ini memastikan tidak ada modul yang terlewat meskipun PyInstaller
@@ -32,9 +31,12 @@ _LOCAL_PKGS = [
 _local_hidden: list = []
 for _pkg in _LOCAL_PKGS:
     try:
-        _local_hidden += collect_submodules(_pkg)
-    except Exception:
-        pass  # Jika gagal, modul tetap tercakup lewat hiddenimports eksplisit di bawah
+        _subs = collect_submodules(_pkg)
+        _local_hidden += _subs
+        print(f"[build.spec] collect_submodules('{_pkg}'): {len(_subs)} modul")
+    except Exception as _e:
+        print(f"[build.spec] collect_submodules('{_pkg}') GAGAL: {_e}")
+        # fallback — modul tetap tercakup lewat hiddenimports eksplisit di bawah
 
 # ─── Kumpulkan native extension DuckDB secara otomatis ───────────────────────
 # collect_all menangani .dll/.pyd/data yang dibutuhkan DuckDB
