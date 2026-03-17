@@ -23,7 +23,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView,
-    QLineEdit, QFileDialog, QScrollArea,
+    QLineEdit, QFileDialog, QScrollArea, QMessageBox,
     QSizePolicy, QAbstractItemView, QStackedWidget, QTextEdit,
     QProgressBar,
 )
