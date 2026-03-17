@@ -8,6 +8,26 @@
         "text": "S0"
       },
       "enabled": true
+    },
+    {
+      "column_name": "sls_org",
+      "side": "left",
+      "transform_type": "replace",
+      "params": {
+        "old": "C161",
+        "new": "STA1"
+      },
+      "enabled": true
+    },
+    {
+      "column_name": "sls_office",
+      "side": "left",
+      "transform_type": "replace",
+      "params": {
+        "old": "C16F",
+        "new": "2AO0"
+      },
+      "enabled": true
     }
   ]
 }

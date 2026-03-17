@@ -604,10 +604,13 @@ class CompareEngine:
                     n_map, rule.left_col, rule.right_cols)
 
         # --- Cek nilai kiri tidak ada di mapping (Q5) ---
+        # BUGFIX: ge.left_val adalah nilai raw dari CSV mapping, sedangkan nl.left_gcol
+        # sudah dinormalisasi (TRIM/LOWER). Normalisasi ge.left_val agar konsisten.
+        _norm_left_val = self._norm.normalize_literal_expr('ge."left_val"')
         try:
             unmapped_rows = self._conn.execute(
                 f'SELECT DISTINCT nl."{left_gcol}" FROM normalized_left nl '
-                f'WHERE NOT EXISTS (SELECT 1 FROM _ge_expected ge WHERE ge.left_val = nl."{left_gcol}")'
+                f'WHERE NOT EXISTS (SELECT 1 FROM _ge_expected ge WHERE {_norm_left_val} = nl."{left_gcol}")'
             ).fetchall()
         except Exception as e:
             logger.warning("[group_exp] Cek unmapped gagal: %s", e)
@@ -628,11 +631,20 @@ class CompareEngine:
         key_join_nl3_nr = " AND ".join(f'nl3."key_{k}" = nr."key_{k}"'       for k in keys)
         key_join_nl_nri = " AND ".join(f'nl."key_{k}" = nr_inner."key_{k}"'  for k in keys)
 
-        # JOIN condition: right row's columns must match expected values
-        ge_right_match    = " AND ".join(f'nr."right_{rule.right_cols[i]}" = ge."rc_{i}"'      for i in range(n_rc))
-        ge_right_match2   = " AND ".join(f'nr."right_{rule.right_cols[i]}" = ge2."rc_{i}"'     for i in range(n_rc))
-        ge_right_match_ml = " AND ".join(f'nr."right_{rule.right_cols[i]}" = ge_ml."rc_{i}"'   for i in range(n_rc))
-        ge_right_match_in = " AND ".join(f'nr_inner."right_{rule.right_cols[i]}" = ge_in."rc_{i}"' for i in range(n_rc))
+        # JOIN condition: right row's columns must match expected values.
+        # BUGFIX: normalize ge.rc_i literals the same way as normalized_right columns
+        # (apply TRIM/LOWER etc.) so that ignore_case / trim_whitespace don't break matching.
+        def _norm_ge(alias_col: str) -> str:
+            return self._norm.normalize_literal_expr(alias_col)
+
+        ge_right_match    = " AND ".join(
+            f'nr."right_{rule.right_cols[i]}" = {_norm_ge(f"ge.\"rc_{i}\"")}'      for i in range(n_rc))
+        ge_right_match2   = " AND ".join(
+            f'nr."right_{rule.right_cols[i]}" = {_norm_ge(f"ge2.\"rc_{i}\"")}'     for i in range(n_rc))
+        ge_right_match_ml = " AND ".join(
+            f'nr."right_{rule.right_cols[i]}" = {_norm_ge(f"ge_ml.\"rc_{i}\"")}'   for i in range(n_rc))
+        ge_right_match_in = " AND ".join(
+            f'nr_inner."right_{rule.right_cols[i]}" = {_norm_ge(f"ge_in.\"rc_{i}\"")}'  for i in range(n_rc))
 
         key_json_nl = self._build_key_json("nl", keys)
         key_json_nr = self._build_key_json("nr", keys)
@@ -645,9 +657,20 @@ class CompareEngine:
             if cm.left_col.lower() not in ge_left_set
             and cm.right_col.lower() not in ge_right_set
         ]
-        left_data_json   = self._build_row_json("nl", [f"left_{cm.left_col}"   for cm in compare_cols])
-        right_data_json  = self._build_row_json("nr", [f"right_{cm.right_col}" for cm in compare_cols])
-        right_data_json2 = self._build_row_json("nr", [f"right_{cm.right_col}" for cm in compare_cols])
+
+        # left_data_json: kolom compare dari sisi kiri
+        left_data_json = self._build_row_json("nl", [f"left_{cm.left_col}" for cm in compare_cols])
+
+        # right_data_json: kolom compare sisi kanan PLUS semua GE right_cols yang tidak ada
+        # di compare_cols — agar hasil detail page menampilkan semua kolom kanan GE.
+        _cmp_right_set = {cm.right_col for cm in compare_cols}
+        _ge_extra_right_cols = [rc for rc in rule.right_cols if rc not in _cmp_right_set]
+        _all_right_cols_for_json = (
+            [f"right_{cm.right_col}" for cm in compare_cols]
+            + [f"right_{rc}" for rc in _ge_extra_right_cols]
+        )
+        right_data_json  = self._build_row_json("nr", _all_right_cols_for_json)
+        right_data_json2 = self._build_row_json("nr", _all_right_cols_for_json)
         diff_cols_expr   = self._build_diff_cols_expr(compare_cols_diff)
 
         diff_checks = []
@@ -662,6 +685,12 @@ class CompareEngine:
         # ── Materialisasi intermediate tables untuk performa hash-join ──
         # Menghindari correlated EXISTS yang dievaluasi ulang per baris.
 
+        # BUGFIX: normalize left_val untuk semua join/lookup agar konsisten dengan
+        # normalized_left yang sudah di-TRIM/LOWER.
+        _norm_left_val_gev  = self._norm.normalize_literal_expr('gev."left_val"')
+        _norm_left_val_ge   = self._norm.normalize_literal_expr('ge."left_val"')
+        _norm_left_val_ge3  = self._norm.normalize_literal_expr('ge3."left_val"')
+
         try:
             # _ge_mapped_left: left rows yang group-val-nya ADA di mapping
             self._conn.execute("DROP TABLE IF EXISTS _ge_mapped_left")
@@ -670,26 +699,31 @@ class CompareEngine:
                 SELECT DISTINCT nl.left_rownum
                 FROM normalized_left nl
                 INNER JOIN (SELECT DISTINCT left_val FROM _ge_expected) gev
-                    ON gev.left_val = nl."{left_gcol}"
+                    ON {_norm_left_val_gev} = nl."{left_gcol}"
             """)
         except Exception as e:
             logger.error("[group_exp] GAGAL membuat _ge_mapped_left: %s", e)
             raise
 
         try:
-            # _ge_matched_left: left rows yang cocok dengan minimal 1 right row via ekspansi
+            # _ge_matched_left: left rows yang cocok dengan minimal 1 right row via ekspansi.
+            # Juga simpan right_rownum dari salah satu right row yang cocok (baris pertama per left)
+            # agar kita bisa mengambil right_data untuk ditampilkan di hasil detail.
             self._conn.execute("DROP TABLE IF EXISTS _ge_matched_left")
             self._conn.execute(f"""
                 CREATE TEMP TABLE _ge_matched_left AS
-                SELECT DISTINCT nl.left_rownum
+                SELECT nl.left_rownum,
+                       MIN(nr.right_rownum) AS matched_right_rownum
                 FROM normalized_left nl
-                INNER JOIN _ge_expected ge ON ge.left_val = nl."{left_gcol}"
+                INNER JOIN _ge_expected ge ON {_norm_left_val_ge} = nl."{left_gcol}"
                 INNER JOIN normalized_right nr ON {key_join_nl_nr} AND {ge_right_match}
+                GROUP BY nl.left_rownum
             """)
         except Exception as e:
             logger.error("[group_exp] GAGAL membuat _ge_matched_left: %s", e)
             raise
 
+        _norm_left_val_ge2 = self._norm.normalize_literal_expr('ge2."left_val"')
         try:
             # _ge_covered_right: right rows yang di-claim oleh minimal 1 left row via ekspansi
             self._conn.execute("DROP TABLE IF EXISTS _ge_covered_right")
@@ -699,13 +733,15 @@ class CompareEngine:
                 FROM normalized_right nr
                 INNER JOIN normalized_left nl2 ON {key_join_nl2_nr}
                 INNER JOIN _ge_expected ge2
-                    ON ge2.left_val = nl2."{left_gcol}" AND {ge_right_match2}
+                    ON {_norm_left_val_ge2} = nl2."{left_gcol}" AND {ge_right_match2}
             """)
         except Exception as e:
             logger.error("[group_exp] GAGAL membuat _ge_covered_right: %s", e)
             raise
 
         # ── PART 1a: mapped left rows + minimal 1 kombinasi ditemukan di kanan → MATCH ──
+        # Sertakan right_data dari right row yang cocok pertama kali ditemukan,
+        # sehingga detail result page dapat menampilkan nilai kolom kanan.
         sql_match = f"""
         INSERT INTO compare_results (row_id, status, key_values, left_data, right_data, diff_columns)
         SELECT
@@ -713,10 +749,11 @@ class CompareEngine:
             '{RESULT_MATCH}',
             {key_json_nl},
             {left_data_json},
-            '{{}}',
+            {right_data_json},
             '[]'
         FROM normalized_left nl
         INNER JOIN _ge_matched_left gml ON gml.left_rownum = nl.left_rownum
+        INNER JOIN normalized_right nr   ON nr.right_rownum = gml.matched_right_rownum
         """
         logger.debug("[group_exp] Any-Match SQL:\n%s", sql_match)
         try:
@@ -812,7 +849,7 @@ class CompareEngine:
         AND NOT EXISTS (
             SELECT 1 FROM normalized_left nl3
             WHERE {key_join_nl3_nr}
-              AND NOT EXISTS (SELECT 1 FROM _ge_expected ge3 WHERE ge3.left_val = nl3."{left_gcol}")
+              AND NOT EXISTS (SELECT 1 FROM _ge_expected ge3 WHERE {_norm_left_val_ge3} = nl3."{left_gcol}")
               AND NOT EXISTS (SELECT 1 FROM _ge_expected ge_ml WHERE {ge_right_match_ml})
         )
         """

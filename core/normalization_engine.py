@@ -137,20 +137,39 @@ class NormalizationEngine:
         col_rules: "List[ColumnTransformRule] | None" = None,
     ) -> str:
         """Bangun ekspresi normalisasi untuk kolom di tabel tertentu.
-        Normalisasi dasar (trim/lower/null/date/number) diterapkan lebih dulu,
-        kemudian transform rules per-kolom diterapkan di atasnya.
+
+        Urutan yang benar:
+          1. CAST + TRIM raw  → nilai bersih sebelum transform
+          2. Transform rules  → replace/prefix/dll. bekerja pada nilai asli
+          3. NULLIF           → ubah string kosong jadi NULL setelah transform
+          4. LOWER            → ignore_case setelah transform (agar 'C161'→'STA1'
+                                tidak gagal akibat case mismatch saat replace)
+          5. Date / Number normalization
+
+        Dengan urutan ini, rule replace {'old':'C161','new':'STA1'} tetap bekerja
+        meski ignore_case=True karena replace dilakukan sebelum LOWER().
         """
         expr = f'CAST("{table_alias}"."{col}" AS VARCHAR)'
 
-        if self._opts.treat_empty_as_null:
-            expr = f"NULLIF({expr}, '')"
-
+        # Step 1: trim raw value terlebih dulu agar transform bekerja pada nilai bersih
         if self._opts.trim_whitespace:
             expr = f"TRIM({expr})"
 
+        # Step 2: terapkan per-kolom transform rules SEBELUM normalisasi lanjutan
+        if col_rules:
+            for rule in col_rules:
+                if rule.enabled:
+                    expr = self._apply_transform(expr, rule)
+
+        # Step 3: treat empty as null (setelah transform, agar prefix '' tetap menjadi NULL)
+        if self._opts.treat_empty_as_null:
+            expr = f"NULLIF({expr}, '')"
+
+        # Step 4: ignore case (setelah transform agar replace 'C161' → 'STA1' tidak gagal)
         if self._opts.ignore_case:
             expr = f"LOWER({expr})"
 
+        # Step 5: date normalization
         if self._opts.normalize_date:
             # Jika nilai BUKAN tanggal, JANGAN dijadikan NULL — kembalikan nilai aslinya.
             date_expr = (
@@ -159,16 +178,27 @@ class NormalizationEngine:
             )
             expr = f"COALESCE({date_expr}, {expr})"
 
+        # Step 6: number normalization
         if self._opts.normalize_number:
             dp = self._opts.decimal_places
             # Jika nilai bukan angka, kembalikan nilai aslinya (jangan NULL)
             num_expr = f"TRY(PRINTF('%.{dp}f', TRY_CAST({expr} AS DOUBLE)))"
             expr = f"COALESCE({num_expr}, {expr})"
 
-        # Terapkan per-kolom transform rules (setelah normalisasi dasar)
-        if col_rules:
-            for rule in col_rules:
-                if rule.enabled:
-                    expr = self._apply_transform(expr, rule)
+        return expr
 
+    def normalize_literal_expr(self, raw_expr: str) -> str:
+        """Terapkan normalisasi dasar pada ekspresi SQL literal (bukan kolom tabel).
+        Digunakan untuk menormalisasi nilai literal di _ge_expected agar konsisten
+        dengan nilai di normalized_right/normalized_left.
+
+        Hanya TRIM dan LOWER diterapkan — transform rules tidak berlaku untuk literal.
+        """
+        expr = raw_expr
+        if self._opts.trim_whitespace:
+            expr = f"TRIM({expr})"
+        if self._opts.treat_empty_as_null:
+            expr = f"NULLIF({expr}, '')"
+        if self._opts.ignore_case:
+            expr = f"LOWER({expr})"
         return expr
