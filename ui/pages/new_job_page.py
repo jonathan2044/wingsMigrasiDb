@@ -2233,11 +2233,6 @@ class _Step3ColumnMapping(QWidget):
                 "Tandai minimal 1 kolom sebagai Key Column — ini yang dipakai untuk mencocokkan baris kiri dan kanan.\n"
                 "Atau, pilih mode 'Pakai Urutan Baris' di atas jika tabel tidak memiliki kolom unik."
             )
-        if not self.get_compare_mappings():
-            return (
-                "Belum ada kolom yang akan dibandingkan nilainya.\n"
-                "Centang minimal 1 kolom di kolom 'Bandingkan'."
-            )
         return None
 
 
