@@ -637,14 +637,23 @@ class CompareEngine:
         def _norm_ge(alias_col: str) -> str:
             return self._norm.normalize_literal_expr(alias_col)
 
-        ge_right_match    = " AND ".join(
-            f'nr."right_{rule.right_cols[i]}" = {_norm_ge(f"ge.\"rc_{i}\"")}'      for i in range(n_rc))
-        ge_right_match2   = " AND ".join(
-            f'nr."right_{rule.right_cols[i]}" = {_norm_ge(f"ge2.\"rc_{i}\"")}'     for i in range(n_rc))
-        ge_right_match_ml = " AND ".join(
-            f'nr."right_{rule.right_cols[i]}" = {_norm_ge(f"ge_ml.\"rc_{i}\"")}'   for i in range(n_rc))
-        ge_right_match_in = " AND ".join(
-            f'nr_inner."right_{rule.right_cols[i]}" = {_norm_ge(f"ge_in.\"rc_{i}\"")}'  for i in range(n_rc))
+        def _ge_match_parts(alias: str, nr_alias: str) -> list:
+            """Bangun list kondisi JOIN untuk GE — tanpa nested f-string agar
+            kompatibel dengan Python 3.11 (backslash tidak boleh di dalam {}).
+            """
+            parts = []
+            for i in range(n_rc):
+                rc_col   = rule.right_cols[i]
+                rc_ref   = alias + '."rc_' + str(i) + '"'
+                nr_col   = nr_alias + '."right_' + rc_col + '"'
+                norm_ref = _norm_ge(rc_ref)
+                parts.append(nr_col + " = " + norm_ref)
+            return parts
+
+        ge_right_match    = " AND ".join(_ge_match_parts('ge',     'nr'))
+        ge_right_match2   = " AND ".join(_ge_match_parts('ge2',    'nr'))
+        ge_right_match_ml = " AND ".join(_ge_match_parts('ge_ml',  'nr'))
+        ge_right_match_in = " AND ".join(_ge_match_parts('ge_in',  'nr_inner'))
 
         key_json_nl = self._build_key_json("nl", keys)
         key_json_nr = self._build_key_json("nr", keys)
