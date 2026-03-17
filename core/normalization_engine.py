@@ -1,11 +1,10 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 core/normalization_engine.py
-Engine normalisasi data sebelum proses perbandingan.
-Menghasilkan ekspresi SQL yang diaplikasikan langsung di DuckDB
-sehingga tidak perlu load ke Python memory.
+
+Normalisasi data sebelum dibandingin. Semua jalan di SQL DuckDB
+biar dev gak perlu looping Python berasa mager.
 """
 
 from __future__ import annotations
@@ -19,17 +18,16 @@ if TYPE_CHECKING:
 
 class NormalizationEngine:
     """
-    Hasilkan ekspresi SQL DuckDB untuk normalisasi nilai kolom.
-    Normalisasi dijalankan saat membuat view/CTE di DuckDB,
-    bukan di Python, agar efisien untuk data besar.
+    Hasilkan ekspresi SQL DuckDB buat normalisasi nilai kolom.
+    Semua proses di SQL, bukan Python — hemat memori, mantaaabbb.
     """
 
     def __init__(self, options: CompareOptions):
         self._opts = options
 
-    def build_col_expr(self, col: str) -> str:
+    def almaBuildExprKolom(self, col: str) -> str:
         """
-        Hasilkan ekspresi SQL untuk satu kolom dengan normalisasi yang dipilih.
+        Bikin ekspresi SQL untuk satu kolom sesuai opsi normalisasi.
         Contoh output: TRIM(LOWER(NULLIF(col, '')))
         """
         expr = f'CAST("{col}" AS VARCHAR)'
@@ -46,6 +44,7 @@ class NormalizationEngine:
         if self._opts.normalize_date:
             # Coba parse sebagai tanggal lalu format ulang.
             # Jika nilai BUKAN tanggal, JANGAN dijadikan NULL — kembalikan nilai aslinya.
+            # testing mode ini — kadang TRY_CAST DATE hasilnya aneh buat format non-standard
             date_expr = (
                 f"TRY(STRFTIME(TRY_CAST({expr} AS DATE), "
                 f"'{self._opts.date_format}'))"
@@ -68,19 +67,19 @@ class NormalizationEngine:
         prefix: str = "",
     ) -> str:
         """
-        Hasilkan SELECT clause dengan semua kolom ternormalisasi.
-        Key columns tidak dinormalisasi agar bisa di-JOIN.
-        Compare columns dinormalisasi sesuai opsi.
+        Bikin SELECT clause lengkap dengan semua kolom yang sudah dinormalisasi.
+        Key columns cukup di-trim aja biar bisa JOIN.
+        Compare columns dinormalisasi full sesuai opsi.
         """
         parts: List[str] = []
 
-        # Key columns - bersihkan saja tapi tetap konsisten
+        # key column — bersihkan aja cukup, yang penting konsisten
         for col in key_columns:
             expr = f'TRIM(CAST("{table_alias}"."{col}" AS VARCHAR))'
             alias = f'"{prefix}{col}"' if prefix else f'"{col}"'
             parts.append(f"{expr} AS {alias}")
 
-        # Compare columns - normalisasi penuh
+        # compare column — normalisasi penuh
         for col in columns:
             if col in key_columns:
                 continue
@@ -91,10 +90,10 @@ class NormalizationEngine:
         return ", ".join(parts)
 
     def _apply_transform(self, expr: str, rule: "ColumnTransformRule") -> str:
-        """Terapkan satu aturan transformasi ke ekspresi SQL yang sudah ada."""
+        """Terapkan satu rule transformasi ke ekspresi SQL. Jozz kalau banyak rule."""
         t = rule.transform_type
         p = rule.params
-
+        # untuk njajal setiap tipe transform — kalau belum ada di sini artinya belum disupport
         def _esc(s: str) -> str:
             """Escape single-quote untuk SQL string literal."""
             return str(s).replace("'", "''")
@@ -136,63 +135,57 @@ class NormalizationEngine:
         col: str,
         col_rules: "List[ColumnTransformRule] | None" = None,
     ) -> str:
-        """Bangun ekspresi normalisasi untuk kolom di tabel tertentu.
+        """
+        Bangun ekspresi normalisasi untuk satu kolom dari tabel tertentu.
 
-        Urutan yang benar:
-          1. CAST + TRIM raw  → nilai bersih sebelum transform
-          2. Transform rules  → replace/prefix/dll. bekerja pada nilai asli
-          3. NULLIF           → ubah string kosong jadi NULL setelah transform
-          4. LOWER            → ignore_case setelah transform (agar 'C161'→'STA1'
-                                tidak gagal akibat case mismatch saat replace)
-          5. Date / Number normalization
-
-        Dengan urutan ini, rule replace {'old':'C161','new':'STA1'} tetap bekerja
-        meski ignore_case=True karena replace dilakukan sebelum LOWER().
+        Urutan sudah diuji, JANGAN diubah — kalau iseng dibalik, rule replace bisa gagal:
+          1. CAST + TRIM raw   → bersihkan dulu
+          2. Transform rules   → replace/prefix/dll. kena nilai asli
+          3. NULLIF            → string kosong jadi NULL setelah transform
+          4. LOWER             → ignore case setelah transform
+          5. Normalisasi tanggal / angka
         """
         expr = f'CAST("{table_alias}"."{col}" AS VARCHAR)'
 
-        # Step 1: trim raw value terlebih dulu agar transform bekerja pada nilai bersih
+        # 1: trim dulu sebelum apapun
         if self._opts.trim_whitespace:
             expr = f"TRIM({expr})"
 
-        # Step 2: terapkan per-kolom transform rules SEBELUM normalisasi lanjutan
+        # 2: transform rules per kolom, dikerjain sebelum normalisasi biar replace gak gagal
         if col_rules:
             for rule in col_rules:
                 if rule.enabled:
                     expr = self._apply_transform(expr, rule)
 
-        # Step 3: treat empty as null (setelah transform, agar prefix '' tetap menjadi NULL)
+        # 3: empty string jadi NULL setelah transform
         if self._opts.treat_empty_as_null:
             expr = f"NULLIF({expr}, '')"
 
-        # Step 4: ignore case (setelah transform agar replace 'C161' → 'STA1' tidak gagal)
+        # 4: ignore case setelah transform supaya replace 'C161' -> 'STA1' tetap jalan
         if self._opts.ignore_case:
             expr = f"LOWER({expr})"
 
-        # Step 5: date normalization
+        # 5: normalisasi tanggal — kalau bukan tanggal, kembalikan nilai asli (jangan NULL)
         if self._opts.normalize_date:
-            # Jika nilai BUKAN tanggal, JANGAN dijadikan NULL — kembalikan nilai aslinya.
             date_expr = (
                 f"TRY(STRFTIME(TRY_CAST({expr} AS DATE), "
                 f"'{self._opts.date_format}'))"
             )
             expr = f"COALESCE({date_expr}, {expr})"
 
-        # Step 6: number normalization
+        # 6: normalisasi angka — kalau bukan angka, kembalikan nilai asli juga
         if self._opts.normalize_number:
             dp = self._opts.decimal_places
-            # Jika nilai bukan angka, kembalikan nilai aslinya (jangan NULL)
             num_expr = f"TRY(PRINTF('%.{dp}f', TRY_CAST({expr} AS DOUBLE)))"
             expr = f"COALESCE({num_expr}, {expr})"
 
         return expr
 
     def normalize_literal_expr(self, raw_expr: str) -> str:
-        """Terapkan normalisasi dasar pada ekspresi SQL literal (bukan kolom tabel).
-        Digunakan untuk menormalisasi nilai literal di _ge_expected agar konsisten
-        dengan nilai di normalized_right/normalized_left.
-
-        Hanya TRIM dan LOWER diterapkan — transform rules tidak berlaku untuk literal.
+        """
+        Normalisasi ekspresi SQL literal (bukan kolom tabel).
+        Dipakai buat mapping _ge_expected supaya konsisten sama normalized data.
+        Cuma TRIM dan LOWER — transform rules gak berlaku untuk nilai literal.
         """
         expr = raw_expr
         if self._opts.trim_whitespace:

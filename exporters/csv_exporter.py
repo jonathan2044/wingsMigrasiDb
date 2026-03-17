@@ -1,9 +1,8 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 exporters/csv_exporter.py
-Export hasil perbandingan ke file CSV.
+Export hasil komparasi ke CSV. Simpel.
 """
 
 from __future__ import annotations

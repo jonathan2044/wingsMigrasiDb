@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 ui/pages/result_page.py
 
@@ -930,7 +929,7 @@ class _DetailView(QWidget):
         self._current_page = page
         if not self._repo:
             return
-        records, total = self._repo.get_page(
+        records, total = self._repo.djumboGetHalaman(
             page, self._page_size, self._status_filter,
             search_key=self._search_text or None,
         )

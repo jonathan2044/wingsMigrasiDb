@@ -1,9 +1,8 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 storage/template_manager.py
-Kelola template konfigurasi perbandingan di database.
+Kelola template konfigurasi komparasi di database.
 """
 
 from __future__ import annotations

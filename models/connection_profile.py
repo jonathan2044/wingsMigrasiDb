@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 models/connection_profile.py
 Model data untuk profil koneksi PostgreSQL.

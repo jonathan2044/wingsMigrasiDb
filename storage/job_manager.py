@@ -1,9 +1,8 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 storage/job_manager.py
-CRUD operations untuk data Compare Job di database.
+CRUD operations untuk data Compare Job. Simpan, ambil, hapus — itu doang.
 """
 
 from __future__ import annotations
@@ -19,12 +18,12 @@ logger = logging.getLogger(__name__)
 
 
 class JobManager:
-    """Kelola penyimpanan dan pengambilan data CompareJob."""
+    """Kelola penyimpanan dan pengambilan data CompareJob. antiGalau CRUD."""
 
     def __init__(self, storage: DuckDBStorage):
         self._storage = storage
 
-    # ------------------------------------------------------------------ write
+    # == write ==
 
     def save(self, job: CompareJob) -> None:
         """Simpan job baru atau update job yang sudah ada."""
@@ -75,7 +74,7 @@ class JobManager:
         self._storage.execute("DELETE FROM jobs WHERE id=?", [job_id])
         logger.debug("Job dihapus: %s", job_id)
 
-    # ------------------------------------------------------------------ read
+    # == read ==
 
     def get_all(self, limit: int = 500) -> List[CompareJob]:
         rows = self._storage.fetchall(
@@ -125,7 +124,7 @@ class JobManager:
                 logger.debug("Folder job dihapus: %s", job_dir)
         logger.info("Job dan data berhasil dihapus: %s", job_id)
 
-    # ------------------------------------------------------------------ helper
+    # == helper ==
 
     def _row_to_job(self, row) -> CompareJob:
         keys = ["id", "name", "job_type", "status", "config",

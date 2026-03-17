@@ -1,10 +1,11 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 storage/result_repository.py
-Repository untuk membaca dan menulis hasil perbandingan per job.
-Setiap job memiliki file DuckDB sendiri agar data besar tidak saling mengganggu.
+
+Repository buat baca/tulis hasil komparasi per job.
+Setiap job punya file DuckDB sendiri biar data gede gak saling ganggu.
+Kalau ketemu bottleneck, cek djumboGetHalaman — itu yang paling sering dipanggil.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_row_id ON compare_results(row_id);
 
 
 class ResultRepository:
-    """Kelola baca/tulis hasil perbandingan per job ke file DuckDB terpisah."""
+    """Kelola baca/tulis hasil komparasi per job ke file DuckDB tersendiri."""
 
     def __init__(self, job_db_path: Path):
         self._path = str(job_db_path)
@@ -69,10 +70,11 @@ class ResultRepository:
     # ------------------------------------------------------------------ write
 
     def bulk_insert(self, records: List[Dict[str, Any]]) -> None:
-        """Simpan batch hasil perbandingan."""
+        """Simpan batch hasil komparasi sekaligus. antiGalau batch processing."""
         if not records or not self._conn:
             return
         import json
+        # ini yang berat kalau data jutaan — nanti coba batch lebih gede
         rows = [
             (
                 r["row_id"],
@@ -114,7 +116,7 @@ class ResultRepository:
             RESULT_DUPLICATE_KEY: counts.get(RESULT_DUPLICATE_KEY, 0),
         }
 
-    def get_page(
+    def djumboGetHalaman(
         self,
         page: int = 1,
         page_size: int = 100,
@@ -122,9 +124,9 @@ class ResultRepository:
         search_key: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
-        Ambil satu halaman hasil perbandingan dengan filter opsional.
-        Paramter search_key melakukan text search pada key_values JSON.
-        Returns (rows, total_count).
+        Ambil satu halaman hasil komparasi, bisa difilter dan dicari.
+        Parameter search_key: cari teks di dalam key_values JSON.
+        Return: (baris, total_count).
         """
         if not self._conn:
             return [], 0
@@ -141,6 +143,7 @@ class ResultRepository:
 
         where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
+        # hitung total dulu baru ambil datanya — testing apakah COUNT ini lambat untuk data jutaan
         count_row = self._conn.execute(
             f"SELECT COUNT(*) FROM compare_results {where}", params
         ).fetchone()
@@ -170,8 +173,8 @@ class ResultRepository:
 
     def get_mismatch_column_breakdown(self) -> List[Tuple[str, int]]:
         """
-        Kembalikan daftar (nama_kolom, jumlah) mismatch per kolom, diurutkan terbanyak dulu.
-        Menggunakan DuckDB JSON unnest agar tidak perlu load ke Python.
+        Daftar (nama_kolom, jumlah) mismatch per kolom, diurutkan dari terbanyak.
+        Proses di DuckDB langsung — gak perlu load ke Python, hemat RAM jozz.
         """
         if not self._conn:
             return []
@@ -223,8 +226,8 @@ class ResultRepository:
     def export_to_file(self, output_path: str, status_filter: Optional[str] = None) -> None:
         """
         Export hasil ke file CSV atau Excel secara efisien.
-        CSV: gunakan DuckDB COPY langsung ke file (tanpa lewat Python memory).
-        Excel: gunakan openpyxl write_only mode agar streaming ke disk.
+        CSV  : DuckDB COPY langsung ke file (gak lewat Python memory, mantaaabbb).
+        Excel: openpyxl write_only supaya streaming ke disk.
         """
         if not self._conn:
             raise RuntimeError("Repository belum dibuka.")
@@ -237,7 +240,7 @@ class ResultRepository:
             self._export_excel(output_path, status_filter)
 
     def _export_csv(self, path: str, status_filter: Optional[str]) -> None:
-        """Export ke CSV menggunakan DuckDB COPY — tanpa lewat Python memory."""
+        """Export ke CSV pakai DuckDB COPY — gak lewat Python, jadi super cepet."""
         where = ""
         if status_filter:
             # Parameterized COPY belum didukung DuckDB, escape manual (nilai dari konstanta internal)
@@ -251,7 +254,7 @@ class ResultRepository:
         logger.info("Export CSV selesai: %s", path)
 
     def _export_excel(self, path: str, status_filter: Optional[str]) -> None:
-        """Export ke Excel menggunakan openpyxl write_only (streaming, hemat memori)."""
+        """Export ke Excel pakai openpyxl write_only (streaming, gak boros memori)."""
         try:
             import openpyxl
         except ImportError:
@@ -265,7 +268,7 @@ class ResultRepository:
         batch_size = 5_000
         page = 1
         while True:
-            records, total = self.get_page(page, batch_size, status_filter)
+            records, total = self.djumboGetHalaman(page, batch_size, status_filter)
             for rec in records:
                 ws.append([
                     rec["row_id"],
@@ -287,6 +290,6 @@ class ResultRepository:
         Export semua hasil ke list Python.
         Untuk dataset besar lebih baik pakai export_to_file().
         """
-        rows, _ = self.get_page(1, 9_999_999, status_filter)
+        rows, _ = self.djumboGetHalaman(1, 9_999_999, status_filter)
         return rows
 

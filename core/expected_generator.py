@@ -1,27 +1,21 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 core/expected_generator.py
 
-Engine untuk menghasilkan file EKSPEKTASI MIGRASI dari data sumber (kiri).
+Generator file EKSPEKTASI MIGRASI dari data sumber (kiri).
 
-Menerapkan seluruh normalisasi + column transform rules + group-expansion
-yang sama persis dengan CompareEngine, kemudian menghasilkan file output
-dengan nama kolom TARGET (right_col), sehingga user dapat:
-  - Langsung membandingkan ekspektasi vs data aktual di sistem target
-    menggunakan VLOOKUP atau pivot
-  - Melihat seharusnya data setelah migrasi tampak seperti apa
+Terapkan normalisasi + transform rules + group-expansion yang sama persis
+dengan CompareEngine, lalu hasilkan file output dengan nama kolom TARGET (right_col).
+Gunanya biar user bisa cek: "seharusnya data setelah migrasi kelihatan seperti ini."
 
-Tiga mode yang didukung:
+Tiga mode:
   Standard / Column Expansion : 1 baris sumber → 1 baris output
   Row Expansion (GE 1:N)      : 1 baris sumber → N baris output sesuai mapping
 
 Performa:
-  CSV   — Python csv.writer + fetchmany(10_000).  utf-8-sig BOM agar langsung
-           dibuka benar di Excel.  Tidak ada batasan baris.
-  Excel — openpyxl write_only + fetchmany(10_000). Tidak ada Python row-loop
-           besar.  Otomatis berhenti di EXCEL_ROW_LIMIT baris.
+  CSV   — csv.writer + fetchmany(10_000). utf-8-sig BOM biar Excel gak salah baca.
+  Excel — openpyxl write_only + fetchmany(10_000). Otomatis berhenti di EXCEL_ROW_LIMIT.
 """
 
 from __future__ import annotations
@@ -112,6 +106,7 @@ class ExpectedMigrationGenerator:
         )
         try:
             self._conn = duckdb.connect(tmp_db)
+            # testing tuning memory dulu — kalau crash OOM kecilkan multiplier di _tune_conn
             self._tune_conn()
 
             self._emit("Mengimpor data sumber...", 0, 0)
@@ -169,6 +164,7 @@ class ExpectedMigrationGenerator:
         except Exception:
             avail = 4_096
         limit = max(2_048, min(int(avail * 0.60), 12 * 1_024))
+        # untuk njajal — di mesin RAM kecil bisa turunin ke 0.40
         self._conn.execute(f"PRAGMA memory_limit='{limit}MB'")
 
     # ──────────────────────────────────────────────────────────────── import

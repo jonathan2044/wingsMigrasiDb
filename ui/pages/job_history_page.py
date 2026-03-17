@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 ui/pages/job_history_page.py
 Halaman Riwayat Job - daftar semua pekerjaan perbandingan.

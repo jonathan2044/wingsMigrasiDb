@@ -1,9 +1,8 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 storage/connection_store.py
-Kelola profil koneksi PostgreSQL di database.
+Kelola profil koneksi PostgreSQL/MySQL. CRUD biasa, gak ada yang spesial.
 """
 
 from __future__ import annotations
@@ -17,12 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 class ConnectionStore:
-    """CRUD profil koneksi PostgreSQL."""
+    """CRUD profil koneksi PostgreSQL/MySQL."""
 
     def __init__(self, storage: DuckDBStorage):
         self._storage = storage
 
-    # ------------------------------------------------------------------ write
+    # == write ==
 
     def save(self, profile: ConnectionProfile) -> None:
         d = profile.to_dict()
@@ -59,7 +58,7 @@ class ConnectionStore:
             "DELETE FROM connection_profiles WHERE id=?", [profile_id]
         )
 
-    # ------------------------------------------------------------------ read
+    # == read ==
 
     def get_all(self) -> List[ConnectionProfile]:
         rows = self._storage.fetchall(
@@ -73,7 +72,7 @@ class ConnectionStore:
         )
         return self._row_to_profile(row) if row else None
 
-    # ------------------------------------------------------------------ helper
+    # == helper ==
 
     def _row_to_profile(self, row) -> ConnectionProfile:
         keys = ["id", "name", "db_type", "host", "port", "database",

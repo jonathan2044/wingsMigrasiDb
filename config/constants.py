@@ -1,9 +1,8 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 config/constants.py
-Konstanta global untuk aplikasi Data Compare Tool.
+Konstanta global aplikasi. Jangan sembarangan ubah value-nya.
 """
 
 # ------------------------------------------------------------------ Job status

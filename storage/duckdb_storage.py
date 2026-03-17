@@ -1,11 +1,11 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 storage/duckdb_storage.py
-Layer penyimpanan utama menggunakan DuckDB.
-Mengelola koneksi, schema metadata (jobs, templates, connections),
-dan staging tables per job untuk proses perbandingan data besar.
+
+Layer penyimpanan utama — ngandalin DuckDB buat metadata app.
+Mengelola koneksi, schema (jobs, templates, connections), dan
+sambungan per-job buat proses komparasi data djumbo gede.
 """
 
 from __future__ import annotations
@@ -70,16 +70,16 @@ CREATE TABLE IF NOT EXISTS connection_profiles (
 
 class DuckDBStorage:
     """
-    Pengelola koneksi DuckDB persisten untuk metadata aplikasi.
-    Thread-safe dengan connection pooling sederhana.
+    Pengelola koneksi DuckDB persisten buat metadata aplikasi.
+    Thread-safe, pakai RLock biar gak deadlock kalau nested.
     """
 
     def __init__(self, db_path: Path):
         self._db_path = str(db_path)
-        self._lock = threading.RLock()  # RLock agar tidak deadlock saat nested acquire
+        self._lock = threading.RLock()  # RLock biar nested acquire gak deadlock
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
 
-    # ------------------------------------------------------------------ lifecycle
+    # == lifecycle ==
 
     # Migration stmts — run ALTER TABLE ADD COLUMN IF NOT EXISTS for new columns
     _MIGRATIONS = [
@@ -93,9 +93,9 @@ class DuckDBStorage:
         "ALTER TABLE connection_profiles ADD COLUMN IF NOT EXISTS db_type          VARCHAR DEFAULT 'postgresql'",
     ]
 
-    def initialize(self):
-        """Inisialisasi database, buat schema bila belum ada."""
-        conn = self._get_conn()
+    def djumboInit(self):
+        """Inisialisasi DB, buat schema kalau belum ada. Wajib dipanggil pas startup."""
+        conn = self._djumboAmbilKoneksi()  # testing koneksi dulu sebelum eksekusi schema
         for stmt in _METADATA_SCHEMA.split(";"):
             stmt = stmt.strip()
             if stmt:  # DuckDB handles inline -- comments natively
@@ -105,8 +105,8 @@ class DuckDBStorage:
             try:
                 conn.execute(mig)
             except Exception:
-                pass  # column may already exist in older DuckDB versions
-        logger.info("Database metadata diinisialisasi: %s", self._db_path)
+                pass  # kolom mungkin sudah ada di versi DB lama, skip aja
+        logger.info("Database metadata siap: %s", self._db_path)
 
     def close(self):
         with self._lock:
@@ -117,18 +117,20 @@ class DuckDBStorage:
                     pass
                 self._conn = None
 
-    # ------------------------------------------------------------------ connection
+    # == koneksi ==
 
-    def _get_conn(self) -> duckdb.DuckDBPyConnection:
+    def _djumboAmbilKoneksi(self) -> duckdb.DuckDBPyConnection:
+        # buka koneksi kalau belum ada, thread-safe
         with self._lock:
+            # kalau koneksi sudah ada pakai aja — jangan buka baru boros resource
             if self._conn is None:
                 self._conn = duckdb.connect(self._db_path)
             return self._conn
 
     def execute(self, sql: str, params=None):
-        """Jalankan perintah SQL (INSERT/UPDATE/DELETE/DDL)."""
+        """Jalankan SQL (INSERT/UPDATE/DELETE/DDL)."""
         with self._lock:
-            conn = self._get_conn()
+            conn = self._djumboAmbilKoneksi()
             if params:
                 conn.execute(sql, params)
             else:
@@ -136,16 +138,16 @@ class DuckDBStorage:
 
     def executescript(self, sql: str):
         with self._lock:
-            conn = self._get_conn()
+            conn = self._djumboAmbilKoneksi()
             for stmt in sql.split(";"):
                 stmt = stmt.strip()
-                if stmt:  # DuckDB handles inline -- comments natively
+                if stmt:
                     conn.execute(stmt)
 
     def fetchall(self, sql: str, params=None) -> list:
         """Ambil semua baris hasil query."""
         with self._lock:
-            conn = self._get_conn()
+            conn = self._djumboAmbilKoneksi()
             if params:
                 result = conn.execute(sql, params)
             else:
@@ -155,7 +157,7 @@ class DuckDBStorage:
     def fetchone(self, sql: str, params=None):
         """Ambil satu baris hasil query."""
         with self._lock:
-            conn = self._get_conn()
+            conn = self._djumboAmbilKoneksi()
             if params:
                 result = conn.execute(sql, params)
             else:
@@ -166,7 +168,7 @@ class DuckDBStorage:
         """Ambil hasil query sebagai pandas DataFrame."""
         import pandas as pd
         with self._lock:
-            conn = self._get_conn()
+            conn = self._djumboAmbilKoneksi()
             if params:
                 result = conn.execute(sql, params)
             else:
@@ -176,15 +178,15 @@ class DuckDBStorage:
     def description(self, sql: str) -> list:
         """Ambil deskripsi kolom dari query."""
         with self._lock:
-            conn = self._get_conn()
+            conn = self._djumboAmbilKoneksi()
             result = conn.execute(sql)
             return result.description or []
 
-    # ------------------------------------------------------------------ job-scoped connection
+    # == koneksi per job ==
 
-    def open_job_db(self, job_db_path: str) -> duckdb.DuckDBPyConnection:
+    def djumboOpenJobDb(self, job_db_path: str) -> duckdb.DuckDBPyConnection:
         """
-        Buka koneksi DuckDB terpisah untuk data spesifik satu job.
-        Caller bertanggung jawab menutup koneksi ini setelah selesai.
+        Buka koneksi DuckDB terpisah khusus untuk satu job.
+        Caller yang buka, caller juga yang harus tutup — jangan lupa ya.
         """
         return duckdb.connect(job_db_path)

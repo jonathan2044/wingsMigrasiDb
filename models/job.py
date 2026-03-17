@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 models/job.py
 Model data untuk Compare Job.

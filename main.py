@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 main.py
 Entry point aplikasi Data Compare Tool.
@@ -54,7 +53,8 @@ def main():
 
     # Inisialisasi storage DB
     storage = DuckDBStorage(settings.db_path)
-    storage.initialize()
+    # testing init — maksa buka DB dari awal, kalau gagal matiin app
+    storage.djumboInit()
 
     # Jalankan Qt Application
     logger.info("Membuat QApplication...")
@@ -97,6 +97,7 @@ def main():
         raise
 
     logger.info("MainWindow berhasil dibuat, memanggil show()...")
+    # coba show dulu — kalau gak muncul cek geometry atau monitor eksternal
     window.show()
     window.raise_()
     window.activateWindow()

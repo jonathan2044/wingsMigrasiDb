@@ -1,12 +1,11 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 workers/compare_worker.py
-Worker thread untuk proses perbandingan data di background.
-Menggunakan QThread agar UI tidak freeze saat proses data besar.
-Mengintegrasikan semua komponen: file reader, postgres connector,
-DuckDB compare engine, dan result repository.
+
+Thread background buat proses komparasi data.
+Pakai QThread supaya UI gak freeze — kalau dijalanin di main thread, user pasti ngamuk.
+Integrasi semua komponen: file reader, konektor DB, DuckDB engine, dan result repository.
 """
 
 from __future__ import annotations
@@ -47,13 +46,13 @@ CREATE INDEX IF NOT EXISTS idx_cr_status ON compare_results(status);
 
 class CompareWorker(QThread):
     """
-    Background thread untuk menjalankan proses perbandingan data.
+    Thread background buat komparasi data.
     
-    Signals:
+    Sinyal:
         progress(step_name, rows_done, total_rows)  - update progress bar
-        log_message(text)                           - pesan log ke UI
-        job_completed(job_id, summary)              - selesai berhasil
-        job_failed(job_id, error_message)           - selesai dengan error
+        log_message(text)                           - kirim log ke UI
+        job_completed(job_id, summary)              - selesai tanpa error
+        job_failed(job_id, error_message)           - selesai tapi gagal
     """
 
     progress = Signal(str, int, int)        # step, done, total
@@ -76,13 +75,13 @@ class CompareWorker(QThread):
         self._cancelled = False
 
     def cancel(self):
-        """Tandai untuk membatalkan proses."""
+        """Tandai untuk membatalkan proses — cek self._cancelled di tiap step."""
         self._cancelled = True
 
-    # ------------------------------------------------------------------ run
+    # == entrypoint thread ==
 
     def run(self):
-        """Entry point thread - jalankan seluruh proses perbandingan."""
+        """Dipanggil otomatis sama QThread — jangan panggil manual."""
         job_id = self._job.id
         job_dir = self._settings.jobs_dir / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -98,12 +97,13 @@ class CompareWorker(QThread):
             conn = duckdb.connect(job_db_path)
 
             try:
-                # Optimalkan DuckDB untuk dataset besar
+                # optimalkan DuckDB buat dataset gede — jangan pelit resource
                 import os as _os
                 _cpu = max(2, (_os.cpu_count() or 4))
                 conn.execute(f"PRAGMA threads={_cpu}")
 
-                # Memory limit: 70% dari RAM tersedia, minimal 2 GB, maksimal 16 GB
+                # memory limit: 70% RAM tersedia, minimal 2GB, maksimal 16GB
+                # kalau pakai laptop kentang, ya sabar aja
                 try:
                     import psutil as _psutil
                     _avail_mb = _psutil.virtual_memory().available // (1024 * 1024)
@@ -118,20 +118,20 @@ class CompareWorker(QThread):
                     if stmt:
                         conn.execute(stmt)
 
-                # Import data kiri dan kanan
+                # import data kiri dan kanan
                 if self._job.job_type == JOB_TYPE_DB_VS_DB:
-                    # DB vs DB: import paralel kedua sumber
-                    left_rows, right_rows = self._import_db_vs_db_parallel(conn)
+                    # DB vs DB: import paralel keduanya sekaligus
+                    left_rows, right_rows = self._djumboImportDBParallel(conn)
                 else:
                     self._emit_progress(STEP_IMPORT_LEFT, 0, 0)
-                    left_rows = self._import_source(
+                    left_rows = self._djumboImportSumber(
                         conn, "src_left", self._config.left_source, "kiri"
                     )
                     if self._cancelled:
                         raise InterruptedError("Proses dibatalkan oleh user.")
 
                     self._emit_progress(STEP_IMPORT_RIGHT, left_rows, 0)
-                    right_rows = self._import_source(
+                    right_rows = self._djumboImportSumber(
                         conn, "src_right", self._config.right_source, "kanan"
                     )
                     if self._cancelled:
@@ -182,7 +182,7 @@ class CompareWorker(QThread):
                     transform_rules=transform_rules,
                     group_expansion_rules=group_expansion_rules,
                 )
-                summary = engine.run()
+                summary = engine.almaRun()
 
                 if self._cancelled:
                     raise InterruptedError("Proses dibatalkan oleh user.")
@@ -233,16 +233,16 @@ class CompareWorker(QThread):
             self._job_manager.update_status(job_id, JOB_STATUS_FAILED, msg)
             self.job_failed.emit(job_id, msg)
 
-    # ------------------------------------------------------------------ import helpers
+    # == helper import ==
 
-    def _import_source(
+    def _djumboImportSumber(
         self,
         conn: duckdb.DuckDBPyConnection,
         table_name: str,
         source: DataSourceConfig,
         side_label: str,
     ) -> int:
-        """Import satu sumber data ke tabel DuckDB. Returns jumlah baris."""
+        """Import satu sumber data ke tabel DuckDB. Return jumlah baris yang masuk."""
 
         def _progress(rows: int):
             self._log(f"  [{side_label}] {rows:,} baris diimpor...")
@@ -252,7 +252,7 @@ class CompareWorker(QThread):
             )
 
         chunk = self._settings.import_chunk_size
-
+        # untuk njajal ukuran chunk — kalau OOM perkecil, kalau lambat perbesar
         if source.source_type in ("excel",):
             from services.file_reader import ExcelReader
             reader = ExcelReader(source.file_path)
@@ -301,7 +301,7 @@ class CompareWorker(QThread):
         else:
             raise ValueError(f"Tipe sumber data tidak dikenal: {source.source_type}")
 
-    # ------------------------------------------------------------------ DB profile resolver
+    # == DB profile resolver ==
 
     def _resolve_db_profile(self, source):
         """Resolve profil koneksi DB dari connection_id atau inline dict."""
@@ -324,12 +324,13 @@ class CompareWorker(QThread):
                 "Isi detail koneksi atau pilih saved profile."
             )
 
-    # ------------------------------------------------------------------ DB vs DB parallel import
+    # == DB vs DB parallel import ==
 
-    def _import_db_vs_db_parallel(self, conn: duckdb.DuckDBPyConnection):
+    def _djumboImportDBParallel(self, conn: duckdb.DuckDBPyConnection):
         """
-        Import kedua sumber DB secara paralel menggunakan ThreadPoolExecutor.
-        Returns (left_rows, right_rows).
+        Import dua sumber DB sekaligus secara paralel pakai ThreadPoolExecutor.
+        Lebih cepet daripada satu-satu — apalagi kalau koneksi lambat.
+        Return: (left_rows, right_rows).
         """
         import concurrent.futures
         import threading
@@ -369,6 +370,7 @@ class CompareWorker(QThread):
         left_rows_result = [0]
         right_rows_result = [0]
 
+        # testing thread import — semoga gak race condition, makanya pakai lock
         def import_left():
             # Use uuid path so DuckDB always creates a fresh database (NamedTemporaryFile
             # creates an empty 0-byte file that DuckDB rejects as "not a valid DuckDB db")
@@ -473,7 +475,7 @@ class CompareWorker(QThread):
         )
         return left_rows_result[0], right_rows_result[0]
 
-    # ------------------------------------------------------------------ helpers
+    # == helpers ==
 
     def _emit_progress(self, step: str, done: int, total: int):
         self.progress.emit(step, done, total)

@@ -1,10 +1,8 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 config/settings.py
-Konfigurasi utama aplikasi Data Compare Tool.
-Mengelola path direktori, database, dan preferensi user.
+Pengaturan utama aplikasi: path, db, preferensi user.
 """
 
 import os

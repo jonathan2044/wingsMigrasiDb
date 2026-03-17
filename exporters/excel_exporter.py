@@ -1,10 +1,8 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 exporters/excel_exporter.py
-Export hasil perbandingan ke file Excel dengan format yang rapi.
-Mendukung highlight warna per status dan multiple sheet.
+Export hasil komparasi ke Excel — highlight warna per status, support multi-sheet.
 """
 
 from __future__ import annotations

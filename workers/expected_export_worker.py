@@ -1,11 +1,10 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 workers/expected_export_worker.py
 
-Background QThread untuk generate & export file ekspektasi migrasi.
-Menjalankan ExpectedMigrationGenerator di luar UI thread agar tidak freeze.
+Background QThread buat generate & export file ekspektasi migrasi.
+Dijalankan di luar UI thread biar gak freeze — rule #1 QThread.
 """
 
 from __future__ import annotations

@@ -1,10 +1,9 @@
 # Copyright (c) 2026 Jonathan Narendra - PT Naraya Prisma Digital
 # Website : https://narayadigital.co.id
-# All rights reserved.
 """
 services/file_reader.py
-Service untuk membaca file Excel dan CSV secara efisien.
-Mendukung preview header, list sheet, dan import chunk-based ke DuckDB.
+Baca file Excel dan CSV secara efisien.
+Support preview header, list sheet, dan import chunk-based ke DuckDB.
 """
 
 from __future__ import annotations
@@ -137,7 +136,7 @@ class ExcelReader:
         """
         total_rows = 0
         first_chunk = True
-
+        # testing loop chunk Excel — ini yang lambat kalau file gede, pertimbangkan openpyxl langsung
         for chunk in self.read_chunks(sheet_name, skip_rows, chunk_size):
             if chunk.empty:
                 continue
@@ -294,6 +293,7 @@ class CSVReader:
         if len(sep) != 1:
             raise ValueError(f"Separator harus 1 karakter, dapat: {sep!r}")
 
+        # njajal path cepat native — kalau malah error langsung fallback ke pandas
         conn.execute(f"DROP TABLE IF EXISTS {table_name}")
         conn.execute(
             f"CREATE TABLE {table_name} AS "
