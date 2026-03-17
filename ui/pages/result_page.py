@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView,
     QLineEdit, QFileDialog, QScrollArea, QMessageBox,
     QSizePolicy, QAbstractItemView, QStackedWidget, QTextEdit,
-    QProgressBar,
+    QProgressBar, QDialog, QProgressDialog,
 )
 
 from config.constants import (
@@ -81,6 +81,117 @@ def _card_frame() -> QFrame:
     f = QFrame()
     f.setObjectName("card")
     return f
+
+
+# ─── Format picker dialog ────────────────────────────────────────────────────
+
+class _ExportExpectedDialog(QDialog):
+    """
+    Dialog pemilihan format untuk download ekspektasi migrasi.
+    Menampilkan dua opsi (Excel dan CSV) beserta keterangan singkat.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._fmt: Optional[str] = None
+        self.setWindowTitle("Download Ekspektasi Migrasi")
+        self.setFixedWidth(480)
+        self.setModal(True)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        vl = QVBoxLayout(self)
+        vl.setContentsMargins(24, 20, 24, 18)
+        vl.setSpacing(14)
+
+        title = QLabel("\u2B07\u00A0\u00A0Download Ekspektasi Migrasi")
+        title.setStyleSheet(
+            f"font-size: 15px; font-weight: 700; color: {COLOR_TEXT};"
+        )
+        vl.addWidget(title)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {COLOR_BORDER};")
+        vl.addWidget(sep)
+
+        desc = QLabel(
+            "Hasilkan file berisi data sumber yang sudah diproses — normalisasi, "
+            "transform rules, dan ekspansi grup — dengan nama kolom sesuai format TARGET.\n"
+            "Gunakan untuk validasi manual atau VLOOKUP dengan data hasil migrasi."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 12px;")
+        vl.addWidget(desc)
+
+        fmt_lbl = QLabel("Pilih format output:")
+        fmt_lbl.setStyleSheet(
+            f"color: {COLOR_TEXT}; font-size: 12px; font-weight: 600; margin-top: 2px;"
+        )
+        vl.addWidget(fmt_lbl)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+
+        self._btn_xlsx = QPushButton("\U0001f4ca\u00A0\u00A0Excel (.xlsx)")
+        self._btn_xlsx.setFixedHeight(48)
+        self._btn_xlsx.setToolTip(
+            "Format tabel dengan header berwarna.\n"
+            "Maks. ~1 juta baris (batas aplikasi Excel)."
+        )
+        self._btn_xlsx.setStyleSheet(
+            "QPushButton { background: #eff6ff; color: #1d4ed8; "
+            "border: 2px solid #3b82f6; border-radius: 8px; "
+            "font-size: 13px; font-weight: 600; padding: 0 20px; }"
+            "QPushButton:hover { background: #dbeafe; border-color: #1d4ed8; }"
+        )
+        self._btn_xlsx.clicked.connect(lambda: self._pick("xlsx"))
+
+        self._btn_csv = QPushButton("\U0001f4c4\u00A0\u00A0CSV (utf-8)")
+        self._btn_csv.setFixedHeight(48)
+        self._btn_csv.setToolTip(
+            "Format CSV dengan BOM utf-8 — langsung terbaca benar di Excel.\n"
+            "Tidak ada batas jumlah baris. Optimal untuk data jutaan baris."
+        )
+        self._btn_csv.setStyleSheet(
+            "QPushButton { background: #f0fdf4; color: #15803d; "
+            "border: 2px solid #22c55e; border-radius: 8px; "
+            "font-size: 13px; font-weight: 600; padding: 0 20px; }"
+            "QPushButton:hover { background: #dcfce7; border-color: #15803d; }"
+        )
+        self._btn_csv.clicked.connect(lambda: self._pick("csv"))
+
+        btn_row.addWidget(self._btn_xlsx, 1)
+        btn_row.addWidget(self._btn_csv, 1)
+        vl.addLayout(btn_row)
+
+        note = QLabel(
+            "\u26a0\ufe0f  Excel mendukung maks. \u00b11 juta baris. "
+            "Untuk data lebih besar, pilih CSV."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(
+            f"color: #92400e; font-size: 11px; background: #fffbeb; "
+            f"border: 1px solid #fcd34d; border-radius: 4px; padding: 6px 8px;"
+        )
+        vl.addWidget(note)
+
+        cancel_row = QHBoxLayout()
+        cancel_row.addStretch()
+        batal = QPushButton("Batal")
+        batal.setObjectName("secondaryBtn")
+        batal.setFixedWidth(80)
+        batal.clicked.connect(self.reject)
+        cancel_row.addWidget(batal)
+        vl.addLayout(cancel_row)
+
+    def _pick(self, fmt: str):
+        self._fmt = fmt
+        self.accept()
+
+    @property
+    def selected_fmt(self) -> Optional[str]:
+        return self._fmt
 
 
 # ─── Left navigation panel ────────────────────────────────────────────────────
@@ -325,11 +436,12 @@ class _SummaryCard(QFrame):
 # ─── Summary view ─────────────────────────────────────────────────────────────
 
 class _SummaryView(QWidget):
-    view_detail_requested = Signal()
-    rerun_requested       = Signal()
-    export_excel_requested = Signal()
-    export_csv_requested   = Signal()
-    filter_detail          = Signal(str)   # status string → buka detail ter-filter
+    view_detail_requested    = Signal()
+    rerun_requested          = Signal()
+    export_excel_requested   = Signal()
+    export_csv_requested     = Signal()
+    export_expected_requested = Signal()   # download ekspektasi migrasi
+    filter_detail             = Signal(str)   # status string → buka detail ter-filter
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -357,6 +469,22 @@ class _SummaryView(QWidget):
         self._btn_csv = QPushButton("\u2193  Export CSV")
         self._btn_csv.setObjectName("secondaryBtn")
         self._btn_csv.clicked.connect(self.export_csv_requested)
+        self._btn_exp = QPushButton("\u2B07  Ekspektasi")
+        self._btn_exp.setToolTip(
+            "Download file ekspektasi migrasi — data sumber yang sudah diproses\n"
+            "(normalisasi + transform) dengan nama kolom TARGET.\n"
+            "Cocok untuk validasi manual atau VLOOKUP."
+        )
+        self._btn_exp.setStyleSheet(
+            "QPushButton { background: #f5f3ff; color: #7c3aed; "
+            "border: 1px solid #a78bfa; border-radius: 6px; "
+            "padding: 4px 12px; font-size: 12px; font-weight: 600; }"
+            "QPushButton:hover { background: #ede9fe; border-color: #7c3aed; }"
+            "QPushButton:disabled { background: #f1f5f9; color: #94a3b8; "
+            "border-color: #e2e8f0; }"
+        )
+        self._btn_exp.clicked.connect(self.export_expected_requested)
+        hdr.addWidget(self._btn_exp)
         hdr.addWidget(self._btn_xls)
         hdr.addWidget(self._btn_csv)
         vl.addLayout(hdr)
@@ -484,6 +612,15 @@ class _SummaryView(QWidget):
         root_vl = QVBoxLayout(self)
         root_vl.setContentsMargins(0, 0, 0, 0)
         root_vl.addWidget(scroll)
+
+    def set_expected_btn_busy(self, busy: bool):
+        """Ubah tampilan tombol Ekspektasi saat proses export berlangsung."""
+        if busy:
+            self._btn_exp.setEnabled(False)
+            self._btn_exp.setText("\u23f3  Mengekspor...")
+        else:
+            self._btn_exp.setEnabled(True)
+            self._btn_exp.setText("\u2B07  Ekspektasi")
 
     def _on_card_clicked(self, status: str):
         self.filter_detail.emit(status)
@@ -902,6 +1039,8 @@ class ResultPage(QWidget):
         self._settings = settings
         self._job: Optional["CompareJob"] = None
         self._repo: Optional["ResultRepository"] = None
+        self._expected_worker = None
+        self._expected_pdlg: Optional[QProgressDialog] = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -933,6 +1072,7 @@ class ResultPage(QWidget):
         self._summary.rerun_requested.connect(lambda: self.rerun_job.emit(self._job.id) if self._job else None)
         self._summary.export_excel_requested.connect(lambda: self._do_export("xlsx"))
         self._summary.export_csv_requested.connect(lambda: self._do_export("csv"))
+        self._summary.export_expected_requested.connect(self._do_export_expected)
         self._summary.filter_detail.connect(self._on_filter_then_switch)
         self._stack.addWidget(self._summary)
 
@@ -1083,7 +1223,149 @@ class ResultPage(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Export Gagal", str(e))
 
+    # ── export ekspektasi migrasi ────────────────────────────────────────────
+
+    def _do_export_expected(self):
+        """Tampilkan dialog format, lalu jalankan ekspor ekspektasi di background."""
+        if not self._job:
+            return
+
+        # 1. Pilih format
+        fmt_dlg = _ExportExpectedDialog(self)
+        if fmt_dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        fmt = fmt_dlg.selected_fmt
+        if not fmt:
+            return
+
+        # 2. Pilih lokasi simpan
+        suffix  = "xlsx" if fmt == "xlsx" else "csv"
+        safe_name = "".join(
+            c if c.isalnum() or c in " _-" else "_"
+            for c in self._job.name[:20]
+        ).strip()
+        default = f"ekspektasi_{safe_name}_{self._job.id[:6]}.{suffix}"
+        filter_str = (
+            "Excel Files (*.xlsx)" if fmt == "xlsx" else "CSV Files (*.csv)"
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Simpan Ekspektasi Migrasi",
+            str(self._settings.exports_dir / default),
+            filter_str,
+        )
+        if not path:
+            return
+
+        # 3. Baca config job
+        from models.compare_config import CompareConfig
+        try:
+            cfg = CompareConfig.from_dict(self._job.config)
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Konfigurasi Error",
+                f"Gagal membaca konfigurasi job:\n{e}",
+            )
+            return
+
+        # 4. Load transform + GE rules sesuai opsi yang aktif di job
+        tx_rules, ge_rules = [], []
+        if cfg.options.apply_global_transforms:
+            try:
+                tx_rules = self._settings.get_transform_rules()
+            except Exception:
+                pass
+        if getattr(cfg.options, "apply_group_expansion", False):
+            try:
+                ge_rules = self._settings.get_group_expansion_rules()
+            except Exception:
+                pass
+
+        # 5. Progress dialog
+        pdlg = QProgressDialog(
+            "Menyiapkan data ekspektasi...", "Batal", 0, 0, self
+        )
+        pdlg.setWindowTitle("Download Ekspektasi Migrasi")
+        pdlg.setWindowModality(Qt.WindowModality.WindowModal)
+        pdlg.setMinimumWidth(420)
+        pdlg.setAutoClose(False)
+        pdlg.setAutoReset(False)
+        pdlg.setValue(0)
+        self._expected_pdlg = pdlg
+
+        # 6. Buat dan mulai worker
+        from workers.expected_export_worker import ExpectedExportWorker
+        self._expected_worker = ExpectedExportWorker(
+            job=self._job,
+            config=cfg,
+            settings=self._settings,
+            output_path=path,
+            fmt=fmt,
+            transform_rules=tx_rules,
+            group_expansion_rules=ge_rules,
+            parent=self,
+        )
+        pdlg.canceled.connect(self._expected_worker.cancel)
+        self._expected_worker.progress.connect(self._on_expected_progress)
+        self._expected_worker.finished.connect(self._on_expected_done)
+        self._expected_worker.failed.connect(self._on_expected_failed)
+
+        self._summary.set_expected_btn_busy(True)
+        pdlg.show()
+        self._expected_worker.start()
+
+    def _on_expected_progress(self, step: str, done: int, total: int):
+        if not self._expected_pdlg:
+            return
+        self._expected_pdlg.setLabelText(step)
+        if total > 0:
+            self._expected_pdlg.setMaximum(total)
+            self._expected_pdlg.setValue(done)
+        else:
+            self._expected_pdlg.setMaximum(0)
+            self._expected_pdlg.setValue(0)
+
+    def _on_expected_done(self, output_path: str, row_count: int):
+        self._summary.set_expected_btn_busy(False)
+        if self._expected_pdlg:
+            self._expected_pdlg.close()
+            self._expected_pdlg = None
+
+        msg = (
+            f"File ekspektasi migrasi berhasil dibuat!\n\n"
+            f"  Baris ditulis : {row_count:,}\n"
+            f"  Lokasi file  : {output_path}\n\n"
+            f"Buka file sekarang?"
+        )
+        reply = QMessageBox.question(
+            self, "Export Selesai", msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            import subprocess
+            import sys
+            if sys.platform == "win32":
+                os.startfile(output_path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", output_path])
+            else:
+                subprocess.Popen(["xdg-open", output_path])
+
+    def _on_expected_failed(self, msg: str):
+        self._summary.set_expected_btn_busy(False)
+        if self._expected_pdlg:
+            self._expected_pdlg.close()
+            self._expected_pdlg = None
+        if msg:  # string kosong = dibatalkan user, tidak perlu pesan
+            QMessageBox.critical(
+                self, "Export Gagal",
+                f"Gagal menghasilkan file ekspektasi migrasi:\n\n{msg}",
+            )
+
     def closeEvent(self, event):
+        if self._expected_worker and self._expected_worker.isRunning():
+            self._expected_worker.cancel()
+            self._expected_worker.wait(3000)
         if self._repo:
             self._repo.close()
         super().closeEvent(event)
