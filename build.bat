@@ -9,8 +9,8 @@ REM  Prasyarat:
 REM    - Python 3.11 (64-bit) terinstall dan ada di PATH
 REM    - Jalankan dari folder project (bukan subfolder)
 REM
-REM  Hasil  : dist\DataCompareTool\DataCompareTool.exe
-REM  Data   : tersimpan di dist\DataCompareTool\AppData\  (portable)
+REM  Hasil  : dist\SFACompareTool\SFACompareTool.exe
+REM  Data   : tersimpan di dist\SFACompareTool\AppData\  (portable)
 REM ============================================================
 
 echo.
@@ -70,10 +70,10 @@ echo [4/6] Membersihkan output build sebelumnya...
 
 REM Backup AppData user agar data tidak hilang saat rebuild
 set APPDATA_BACKUP=0
-if exist "dist\DataCompareTool\AppData" (
+if exist "dist\SFACompareTool\AppData" (
     echo        Ditemukan AppData user, backup dulu...
     if exist "_appdata_backup" rmdir /s /q "_appdata_backup"
-    xcopy /e /i /q /y "dist\DataCompareTool\AppData" "_appdata_backup" >nul
+    xcopy /e /i /q /y "dist\SFACompareTool\AppData" "_appdata_backup" >nul
     if errorlevel 1 (
         echo [WARN] Backup AppData gagal, lanjutkan rebuild tanpa backup.
     ) else (
@@ -82,9 +82,9 @@ if exist "dist\DataCompareTool\AppData" (
     )
 )
 
-if exist "dist\DataCompareTool" (
-    rmdir /s /q "dist\DataCompareTool"
-    echo        dist\DataCompareTool\ dihapus.
+if exist "dist\SFACompareTool" (
+    rmdir /s /q "dist\SFACompareTool"
+    echo        dist\SFACompareTool\ dihapus.
 )
 if exist "build" (
     rmdir /s /q "build"
@@ -111,12 +111,12 @@ echo.
 echo [6/6] Menyiapkan struktur portable...
 
 REM Pastikan _portable marker ada di dalam dist (settings.py mendeteksinya)
-copy /y "_portable" "dist\DataCompareTool\_portable" >nul
+copy /y "_portable" "dist\SFACompareTool\_portable" >nul
 
 REM Restore AppData user dari backup (jika ada), atau buat folder kosong
 if "%APPDATA_BACKUP%"=="1" (
     echo        Merestore AppData user dari backup...
-    xcopy /e /i /q /y "_appdata_backup" "dist\DataCompareTool\AppData" >nul
+    xcopy /e /i /q /y "_appdata_backup" "dist\SFACompareTool\AppData" >nul
     if errorlevel 1 (
         echo [WARN] Restore AppData gagal. Data mungkin tidak terestore.
     ) else (
@@ -125,14 +125,14 @@ if "%APPDATA_BACKUP%"=="1" (
     )
 ) else (
     REM Belum ada AppData sebelumnya, buat folder kosong
-    if not exist "dist\DataCompareTool\AppData" (
-        mkdir "dist\DataCompareTool\AppData"
+    if not exist "dist\SFACompareTool\AppData" (
+        mkdir "dist\SFACompareTool\AppData"
     )
 )
 
 REM Salin demo_data bila ada
 if exist "demo_data" (
-    xcopy /e /i /q /y "demo_data" "dist\DataCompareTool\demo_data" >nul
+    xcopy /e /i /q /y "demo_data" "dist\SFACompareTool\demo_data" >nul
     echo        demo_data disalin.
 )
 
@@ -141,27 +141,27 @@ REM Buat file README singkat di dalam dist untuk user
     echo Data Compare Tool v1.0.0
     echo ========================
     echo.
-    echo Jalankan: DataCompareTool.exe
+    echo Jalankan: SFACompareTool.exe
     echo.
     echo Data Anda disimpan di folder AppData\ di samping file .exe ini.
     echo Untuk memindahkan, copy SELURUH folder ini ke lokasi baru.
     echo.
     echo Jangan hapus file _portable — file ini yang membuat app berjalan portable.
-) > "dist\DataCompareTool\CARA_PAKAI.txt"
+) > "dist\SFACompareTool\CARA_PAKAI.txt"
 
 REM ── Selesai ───────────────────────────────────────────────────────────────
 echo.
 echo =====================================================
 echo   BUILD BERHASIL!
 echo.
-echo   Output   : dist\DataCompareTool\
-echo   Exe      : dist\DataCompareTool\DataCompareTool.exe
+echo   Output   : dist\SFACompareTool\
+echo   Exe      : dist\SFACompareTool\SFACompareTool.exe
 echo   Ukuran   :
-dir /s /-c "dist\DataCompareTool" 2>nul | find "File(s)"
+dir /s /-c "dist\SFACompareTool" 2>nul | find "File(s)"
 echo.
 echo   Cara distribusi:
-echo     Copy seluruh folder dist\DataCompareTool\ ke USB / laptop klien.
-echo     User cukup double-click DataCompareTool.exe
+echo     Copy seluruh folder dist\SFACompareTool\ ke USB / laptop klien.
+echo     User cukup double-click SFACompareTool.exe
 echo =====================================================
 echo.
 
@@ -169,11 +169,11 @@ REM Tanya apakah mau buat ZIP untuk distribusi
 set /p MAKEZIP=Buat file ZIP untuk distribusi? (Y/N): 
 if /i "!MAKEZIP!"=="Y" (
     echo Membuat ZIP...
-    powershell -Command "Compress-Archive -Path 'dist\DataCompareTool' -DestinationPath 'dist\DataCompareTool_portable.zip' -Force"
+    powershell -Command "Compress-Archive -Path 'dist\SFACompareTool' -DestinationPath 'dist\SFACompareTool_portable.zip' -Force"
     if errorlevel 1 (
-        echo [WARN] Gagal buat ZIP. Folder dist\DataCompareTool\ tetap bisa digunakan.
+        echo [WARN] Gagal buat ZIP. Folder dist\SFACompareTool\ tetap bisa digunakan.
     ) else (
-        echo ZIP selesai: dist\DataCompareTool_portable.zip
+        echo ZIP selesai: dist\SFACompareTool_portable.zip
     )
 )
 
