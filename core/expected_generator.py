@@ -246,7 +246,7 @@ class ExpectedMigrationGenerator:
         Sama dengan CompareEngine._build_normalized_views() tapi hanya sisi kiri.
         """
         key_cols = [m.left_col for m in self._config.key_columns]
-        val_cols = list({m.left_col for m in self._config.compare_columns})
+        val_cols = list(dict.fromkeys(m.left_col for m in self._config.compare_columns))
 
         # Pastikan GE left_col ada di val_cols agar bisa di-JOIN nanti
         ge = self._find_active_ge_rule()
@@ -353,9 +353,10 @@ class ExpectedMigrationGenerator:
         Cabang B: baris yang left_val TIDAK ada di mapping → fallback 1:1,
                   right_col[0] = nilai asli kiri, right_col[1..N-1] = NULL.
         """
-        ge_lc  = rule.left_col
-        n      = len(rule.right_cols)
-        non_ge = [m for m in cm if m.left_col != ge_lc]
+        ge_lc      = rule.left_col
+        ge_lc_low  = ge_lc.lower()
+        n          = len(rule.right_cols)
+        non_ge     = [m for m in cm if m.left_col.lower() != ge_lc_low]
 
         key_parts = [f'nl."key_{m.left_col}" AS "{m.right_col}"' for m in km]
         cmp_parts = [

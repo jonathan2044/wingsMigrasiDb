@@ -1306,7 +1306,7 @@ class ResultPage(QWidget):
         )
         pdlg.canceled.connect(self._expected_worker.cancel)
         self._expected_worker.progress.connect(self._on_expected_progress)
-        self._expected_worker.finished.connect(self._on_expected_done)
+        self._expected_worker.export_done.connect(self._on_expected_done)
         self._expected_worker.failed.connect(self._on_expected_failed)
 
         self._summary.set_expected_btn_busy(True)

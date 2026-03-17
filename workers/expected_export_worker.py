@@ -28,15 +28,15 @@ class ExpectedExportWorker(QThread):
     Worker thread untuk proses generate & export ekspektasi migrasi.
 
     Signals:
-        progress(step, rows_done, total)  — update progress di UI
-        finished(output_path, row_count)  — export berhasil
-        failed(error_message)             — export gagal atau dibatalkan
-                                            (string kosong = dibatalkan user)
+        progress(step, rows_done, total)    — update progress di UI
+        export_done(output_path, row_count) — export berhasil
+        failed(error_message)               — export gagal atau dibatalkan
+                                              (string kosong = dibatalkan user)
     """
 
-    progress = Signal(str, int, int)   # step, done, total
-    finished = Signal(str, int)        # output_path, row_count
-    failed   = Signal(str)             # error_message (kosong = cancelled)
+    progress    = Signal(str, int, int)   # step, done, total
+    export_done = Signal(str, int)        # output_path, row_count
+    failed      = Signal(str)             # error_message (kosong = cancelled)
 
     def __init__(
         self,
@@ -82,7 +82,7 @@ class ExpectedExportWorker(QThread):
                 fmt=self._fmt,
                 settings=self._settings,
             )
-            self.finished.emit(self._out_path, count)
+            self.export_done.emit(self._out_path, count)
 
         except InterruptedError:
             # Dibatalkan user — tidak perlu menampilkan pesan error
