@@ -609,6 +609,7 @@ class _DetailView(QWidget):
         self._repo: Optional["ResultRepository"] = None
         self._key_mappings: list = []
         self._compare_mappings: list = []
+        self._ge_extra_right_cols: List[str] = []  # GE right_cols not in compare_columns
         self._status_filter: Optional[str] = None
         self._search_text: str = ""
         self._current_page: int = 1
@@ -719,9 +720,11 @@ class _DetailView(QWidget):
 
     # ── data ──
 
-    def setup_columns(self, job: "CompareJob", key_maps: list, cmp_maps: list):
-        self._key_mappings    = key_maps
-        self._compare_mappings = cmp_maps
+    def setup_columns(self, job: "CompareJob", key_maps: list, cmp_maps: list,
+                       ge_extra_right_cols: Optional[List[str]] = None):
+        self._key_mappings         = key_maps
+        self._compare_mappings     = cmp_maps
+        self._ge_extra_right_cols  = ge_extra_right_cols or []
         self._bc.setText(f"{job.job_number}  \u203a  Cek Detail")
         self._title.setText(f"{job.name}  \u2014  Cek Detail")
         self._rebuild_headers()
@@ -733,6 +736,9 @@ class _DetailView(QWidget):
         for cm in self._compare_mappings:
             headers.append(f"{cm.left_col}  \u2191")
             headers.append(f"{cm.right_col}  \u2193")
+        # GE extra right_cols: tampil sebagai kolom kanan tambahan (tanpa pasangan kiri)
+        for rc in self._ge_extra_right_cols:
+            headers.append(f"{rc}  \u2193 (GE)")
         headers.append("Diff Cols")
         self._table.setColumnCount(len(headers))
         self._table.setHorizontalHeaderLabels(headers)
@@ -821,6 +827,18 @@ class _DetailView(QWidget):
                 self._table.setItem(r, col, li)
                 self._table.setItem(r, col + 1, ri)
                 col += 2
+
+            # GE extra right_cols (read-only, kanan saja)
+            for rc in self._ge_extra_right_cols:
+                rgt_val = str(rgt_data.get(f"right_{rc}", "") or "")
+                if status == RESULT_MISSING_LEFT:
+                    rgt_val = "\u2014"
+                ri = QTableWidgetItem(rgt_val)
+                ri.setBackground(row_bg)
+                if status == RESULT_MISSING_LEFT:
+                    ri.setForeground(QColor(COLOR_TEXT_LIGHT))
+                self._table.setItem(r, col, ri)
+                col += 1
 
             # Diff cols
             diff_item = QTableWidgetItem(", ".join(sorted(diff_set)) if diff_set else "\u2014")
@@ -973,7 +991,24 @@ class ResultPage(QWidget):
             cfg = CompareConfig.from_dict(self._job.config)
         except Exception:
             return
-        self._detail.setup_columns(self._job, cfg.key_columns, cfg.compare_columns)
+
+        # Deteksi GE extra right_cols: kolom kanan dari GE rule yang tidak ada di compare_columns
+        ge_extra_right_cols: List[str] = []
+        if getattr(cfg.options, "apply_group_expansion", False):
+            try:
+                ge_rules = self._settings.get_group_expansion_rules()
+                cmp_right_set = {cm.right_col for cm in cfg.compare_columns}
+                for rule in ge_rules:
+                    if not rule.enabled:
+                        continue
+                    for rc in rule.right_cols:
+                        if rc not in cmp_right_set and rc not in ge_extra_right_cols:
+                            ge_extra_right_cols.append(rc)
+            except Exception:
+                pass
+
+        self._detail.setup_columns(self._job, cfg.key_columns, cfg.compare_columns,
+                                   ge_extra_right_cols)
         self._detail.set_repo(self._repo)
 
     def _do_export(self, fmt: str):
